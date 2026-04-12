@@ -105,6 +105,10 @@ function step() {
   current_step = current_step + 1
 }
  
+# Execute on reset
+function reset() {
+}
+
 # Execute at exit
 function destroy() {
 }
