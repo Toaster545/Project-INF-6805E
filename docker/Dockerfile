@@ -5,7 +5,7 @@ LABEL DBM-SMS.version="0.1"
 # Install common dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
-    dpkg \ 
+    dpkg \
     git \
     pkg-config \
     python \
@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y \
     libboost-filesystem-dev \
     cmake \
     && rm -rf /var/lib/apt/lists/*
-    
+
 RUN apt-get update && \
     apt-get -y install sudo
 RUN adduser --disabled-password --gecos '' docker
@@ -82,6 +82,50 @@ RUN cd /home/docker/buzz &&\
     make install &&\
     ldconfig
 
+# Create ARGoSConfig.cmake if the argos3 fork didn't install one
+RUN if ! find /usr/local -name "ARGoSConfig.cmake" 2>/dev/null | grep -q .; then \
+      mkdir -p /usr/local/lib/cmake/argos3 && \
+      printf 'set(ARGOS_FOUND TRUE)\nset(ARGoS_FOUND TRUE)\nset(ARGOS_PREFIX "/usr/local")\nset(ARGOS_INSTALL_PREFIX "/usr/local")\nset(ARGOS_INCLUDE_DIRS "/usr/local/include")\nset(ARGOS_LIBRARY_DIRS "/usr/local/lib/argos3")\nset(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "/usr/local/share/argos3/cmake")\nset(ARGOS_BUILD_FOR_SIMULATOR TRUE)\nset(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/usr/lib/x86_64-linux-gnu")\nfind_package(Qt5 COMPONENTS Widgets Gui OpenGL QUIET)\nif(Qt5Widgets_FOUND AND Qt5Gui_FOUND)\n  set(ARGOS_QTOPENGL_FOUND TRUE)\n  set(CMAKE_AUTOMOC ON)\n  set(CMAKE_CXX_STANDARD 14)\n  set(CMAKE_INCLUDE_CURRENT_DIR ON)\n  set(ARGOS_QTOPENGL_INCLUDE_DIRS ${Qt5Widgets_INCLUDE_DIRS} ${Qt5Gui_INCLUDE_DIRS} ${Qt5OpenGL_INCLUDE_DIRS})\n  set(ARGOS_QTOPENGL_LIBRARIES ${Qt5Widgets_LIBRARIES} ${Qt5Gui_LIBRARIES} ${Qt5OpenGL_LIBRARIES})\nendif()\n' \
+        > /usr/local/lib/cmake/argos3/ARGoSConfig.cmake; \
+    fi
+
+# Expose Lua headers at the unversioned path expected by argos3 plugins
+RUN ln -sf /usr/include/lua5.3/lua.h /usr/include/lua.h &&\
+    ln -sf /usr/include/lua5.3/lauxlib.h /usr/include/lauxlib.h &&\
+    ln -sf /usr/include/lua5.3/luaconf.h /usr/include/luaconf.h &&\
+    ln -sf /usr/include/lua5.3/lualib.h /usr/include/lualib.h
+
+# Register argos3 plugin library path with the dynamic linker
+# Also symlink .so files into /usr/local/lib so ld finds them at compile-time link
+RUN echo "/usr/local/lib/argos3" > /etc/ld.so.conf.d/argos3.conf && ldconfig &&\
+    find /usr/local/lib/argos3 -name "*.so" -exec ln -sf {} /usr/local/lib/ \;
+
+# Install ARGoS Khepera IV plugin
+RUN . /home/docker/argos3/build_simulator/setup_env.sh &&\
+    git clone https://github.com/ilpincy/argos3-kheperaiv.git /home/docker/argos3-kheperaiv &&\
+    cd /home/docker/argos3-kheperaiv &&\
+    mkdir build &&\
+    cd build &&\
+    cmake -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/x86_64-linux-gnu" \
+          -DARGoS_DIR=/usr/local/lib/cmake/argos3 \
+          -DCMAKE_MODULE_PATH=/usr/local/share/argos3/cmake \
+          ../src &&\
+    make &&\
+    make install &&\
+    ldconfig
+
+# Normalize kheperaiv install paths: cmake may install to /include and /lib instead of /usr/local
+RUN if [ -d /include/argos3 ]; then cp -rn /include/argos3/. /usr/local/include/argos3/; fi &&\
+    find /lib/argos3 -name "*.so" -exec cp -n {} /usr/local/lib/argos3/ \; 2>/dev/null || true
+# Re-run symlinks and ldconfig to pick up kheperaiv library installed after the first run
+RUN find /usr/local/lib/argos3 -name "*.so" -exec ln -sf {} /usr/local/lib/ \; && ldconfig
+
+# Patch: ilpincy kheperaiv declares RegisterFunctions() private; DBM-SMS calls it explicitly
+RUN perl -i -0pe \
+    's/private:\n\n   virtual buzzvm_state RegisterFunctions/protected:\n\n   virtual buzzvm_state RegisterFunctions/' \
+    /usr/local/include/argos3/plugins/robots/kheperaiv/control_interface/buzz_controller_kheperaiv.h
+
 # Simulation dependencies
 RUN apt-get update && apt-get install -y python-pip
 RUN pip install matplotlib && pip install scipy
@@ -94,6 +138,9 @@ RUN cd /home/docker/ &&\
     git clone https://github.com/lajoiepy/DBM-SMS.git
 
 # Compile C++ controller
+# Patch: DBM-SMS CMakeLists doesn't link kheperaiv, causing undefined symbols at runtime
+RUN sed -i 's/argos3plugin_simulator_buzz/argos3plugin_simulator_kheperaiv\n  argos3plugin_simulator_buzz/' \
+    /home/docker/DBM-SMS/sim/controller/src/CMakeLists.txt
 RUN cd /home/docker/DBM-SMS/sim/controller &&\
    mkdir build &&\
    cd build/ &&\
@@ -101,7 +148,16 @@ RUN cd /home/docker/DBM-SMS/sim/controller &&\
    make &&\
    make install
 
-# Compile buzz script
+# Compile loop functions
+RUN cd /home/docker/DBM-SMS/sim/loop_functions &&\
+   mkdir build &&\
+   cd build/ &&\
+   cmake ../src &&\
+   make &&\
+   make install
+
+# Compile buzz scripts
 RUN cd /home/docker/DBM-SMS/sim &&\
-    bzzc dbm-random-walk.bzz &&\
-    bzzc dbm-gradient.bzz
+    bzzc dora.bzz &&\
+    bzzc frontier.bzz &&\
+    bzzc randomwalk.bzz

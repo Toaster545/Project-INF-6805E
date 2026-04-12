@@ -1,0 +1,16 @@
+services:
+  argos:
+    build: .
+    container_name: argos_project
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - ${HOME}/School/Swarm/project/Project-INF-6805E/sim:/workspace
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    stdin_open: true
+    tty: true
+    network_mode: host
+
+# xhost +local:docker
+# docker exec -it argos bash
