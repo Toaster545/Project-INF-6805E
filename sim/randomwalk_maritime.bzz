@@ -1,0 +1,128 @@
+###
+# Maritime SAR baseline: random-walk with target detection.
+#
+# Each robot wanders randomly and calls is_target_detected() every step.
+# The exploration stigmergy is maintained and broadcast so the benchmarking
+# script can measure coverage over time.  There is no failure model (UAVs
+# do not fail near a maritime target).
+#
+# Compared to the original randomwalk.bzz:
+#   - get_radiation_intensity()  ->  is_target_detected()
+#   - failure() model removed
+#   - stigmergy_exploration logged instead of stigmergy_risk
+#   - onconflict keeps the most-recent visit timestamp (max), not first-write
+###
+
+include "buzz_includes/buzz_utils/vec2.bzz"
+include "buzz_includes/buzz_utils/string.bzz"
+include "config/DBM-SMS/parameters.bzz"
+include "buzz_includes/DBM-SMS/global_variables.bzz"
+include "buzz_includes/debug.bzz"
+
+var stigmergy_exploration
+var target_found = 0
+
+###
+# Logging
+###
+
+function log_metrics() {
+  if (debug.msgqueue != nil) {
+    log_datasize(debug.msgqueue.total, current_step)
+  }
+
+  # Robot 0 logs the full exploration map so compute_metrics.py can
+  # reconstruct coverage over time.
+  if (id == 0) {
+    stigmergy_exploration.foreach(function(key, data, robot) {
+      log_datum(key, data * 1.0, current_step)
+    })
+  }
+}
+
+###
+# Stigmergy
+###
+
+function init_stigmergies() {
+  stigmergy_exploration = stigmergy.create(1)
+  # Keep the most-recent visit timestamp so robots share up-to-date
+  # knowledge about where the target might still be.
+  stigmergy_exploration.onconflict(function(k, l, r) {
+    if (l > r) {
+      return l
+    }
+    return r
+  })
+}
+
+function update_exploration() {
+  stigmergy_exploration.put(get_current_key(), current_step)
+}
+
+###
+# Navigation: random walk (unchanged from original)
+###
+
+function random_search() {
+  next_position.x = uniform(
+    math.max(next_position.x - SEARCH_SPEED / 100, SEARCH_SPACE.minx),
+    math.min(next_position.x + SEARCH_SPEED / 100, SEARCH_SPACE.maxx))
+  next_position.y = uniform(
+    math.max(next_position.y - SEARCH_SPEED / 100, SEARCH_SPACE.miny),
+    math.min(next_position.y + SEARCH_SPEED / 100, SEARCH_SPACE.maxy))
+
+  next_position_local = math.vec2.rotate(
+    math.vec2.sub(next_position, pose.position),
+    -pose.orientation.yaw)
+
+  scaled_direction = math.vec2.scale(next_position_local, SEARCH_SPEED)
+  gotoc(scaled_direction.x, scaled_direction.y)
+}
+
+###
+# ARGoS lifecycle
+###
+
+function init() {
+  show_colored_trajectory(NUMBER_OF_ROBOTS)
+
+  next_position.x = pose.position.x
+  next_position.y = pose.position.y
+
+  set_leds(0, 255, 0)
+  init_stigmergies()
+  target_found = 0
+  math.rng.setseed(id)
+}
+
+function step() {
+  if (current_step < EXPERIMENT_LENGHT) {
+
+    # Check for target each step.
+    if (is_target_detected() and target_found == 0) {
+      target_found = 1
+      log("Robot ", id, ": Target detected at step ", current_step)
+      set_leds(0, 0, 255)
+    }
+
+    if (current_step % NEW_POSE_DELAY) {
+      update_exploration()
+      random_search()
+    }
+
+    log_metrics()
+  }
+
+  if (current_step >= EXPERIMENT_LENGHT) {
+    set_wheels(0.0, 0.0)
+  }
+
+  current_step = current_step + 1
+}
+
+function reset() {
+}
+
+function destroy() {
+}

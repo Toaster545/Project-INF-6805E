@@ -5,6 +5,7 @@
 
 #include <random>
 #include <chrono>
+#include <fstream>
 #include <vector>
 
 #include "radiation_source.h"
@@ -39,8 +40,12 @@ public:
 
    float GetRadiationIntensity();
 
+   /* Returns true when this robot is within detection range of the maritime
+    * target.  Every positive detection is logged to detections{N}.csv. */
+   bool IsTargetDetected();
+
    void LogDatum(const std::string& key, const float& data, const int& step);
-   
+
    void LogDataSize(const int& total_data, const int& step);
 
 protected:
@@ -51,7 +56,14 @@ private:
 
    std::default_random_engine random_engine_;
 
-   std::string result_file_name_, data_transmitted_file_name_, radiation_file_name_;
+   std::string result_file_name_, data_transmitted_file_name_,
+               radiation_file_name_;
+
+   /* Persistent file handles — opened once, kept open until destruction. */
+   std::ofstream result_file_;
+   std::ofstream data_transmitted_file_;
+
+   bool target_found_;
 
 };
 }

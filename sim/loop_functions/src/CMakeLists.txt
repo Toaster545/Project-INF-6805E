@@ -32,8 +32,12 @@ endif(ARGOS_FOUND)
 set(ARGOS_BUZZ_SOURCES
   argos/radiation_loop_functions.h
   argos/radiation_loop_functions.cpp
-  ../../controller/src/argos/radiation_source.h       
-  ../../controller/src/argos/radiation_source.cpp)
+  argos/maritime_loop_functions.h
+  argos/maritime_loop_functions.cpp
+  ../../controller/src/argos/radiation_source.h
+  ../../controller/src/argos/radiation_source.cpp
+  ../../controller/src/argos/maritime_target.h
+  ../../controller/src/argos/maritime_target.cpp)
 
 add_library(argos3plugin_loop_functions SHARED ${ARGOS_BUZZ_SOURCES})
 target_link_libraries(argos3plugin_loop_functions

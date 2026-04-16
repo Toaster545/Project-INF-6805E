@@ -5,18 +5,21 @@
   <!-- * General configuration * -->
   <!-- ************************* -->
   <framework>
-    <system threads="10" />
+    <system threads="30" />
     <experiment length="300"
-                ticks_per_second="5" 
+                ticks_per_second="5"
                 random_seed="0"/>
-    <!--profiling file="profile.txt"
-             format="human_readable"
-             truncate_file="true" /-->
   </framework>
-  
+
   <!-- *************** -->
   <!-- * Controllers * -->
   <!-- *************** -->
+  <!--
+    Switch bytecode_file / debug_file between:
+      dora_maritime.bo   / dora_maritime.bdb    (drift-aware DORA)
+      randomwalk_maritime.bo / randomwalk_maritime.bdb  (random-walk baseline)
+    Recompile with `bzzc <script>.bzz` after any Buzz change.
+  -->
   <controllers>
     <buzz_controller_drone_sim id="drone_controller">
       <actuators>
@@ -30,11 +33,11 @@
                              show_rays="false" noise_std_dev="0" />
         <positioning         implementation="default" />
       </sensors>
-      <params bytecode_file="randomwalk.bo" debug_file="randomwalk.bdb">
+      <params bytecode_file="dora_maritime.bo" debug_file="dora_maritime.bdb">
         <wheel_turning hard_turn_angle_threshold="90"
-                        soft_turn_angle_threshold="70"
-                        no_turn_angle_threshold="0"
-                        max_speed="80" />
+                       soft_turn_angle_threshold="70"
+                       no_turn_angle_threshold="0"
+                       max_speed="80" />
       </params>
     </buzz_controller_drone_sim>
   </controllers>
@@ -42,8 +45,36 @@
   <!-- ****************** -->
   <!-- * Loop Functions * -->
   <!-- ****************** -->
-  <loop_functions library="libargos3plugin_loop_functions.so" label="radiation_loop_functions">
-    <radiation radius="0.5"/>
+  <!--
+    maritime node parameters
+    ─────────────────────────────────────────────────────────────────────────
+    target_x / target_y   Initial position of the SAR target (metres).
+    drift_x  / drift_y    Ocean-current vector applied every simulation tick
+                          (metres/tick).  Set both to 0.0 for a static target.
+    noise_std             Std-dev of the Gaussian wind/wave perturbation added
+                          to each drift step (metres).  0.0 = deterministic.
+    detection_radius      A robot within this distance detects the target (m).
+    min_x .. max_y        Optional arena bounds for target clamping.
+                          Defaults to ±9.5 m (inside the 20×20 m walls).
+
+    Scenario presets (edit drift_x / drift_y to switch):
+      Static   : drift_x="0.0"  drift_y="0.0"
+      Low drift: drift_x="0.01" drift_y="0.0"   (~3 m over 300 steps)
+      Med drift: drift_x="0.02" drift_y="0.0"   (~6 m over 300 steps)
+      High drift: drift_x="0.04" drift_y="0.0"  (~12 m over 300 steps)
+
+    Remember to update DRIFT_X / DRIFT_Y in config/DBM-SMS/parameters.bzz
+    to match so the robots use the correct drift prior.
+  -->
+  <loop_functions library="libargos3plugin_loop_functions.so"
+                  label="maritime_loop_functions">
+    <maritime target_x="0.0"
+              target_y="0.0"
+              drift_x="0.02"
+              drift_y="0.0"
+              noise_std="0.01"
+              theta="0.1"
+              detection_radius="1.0" />
   </loop_functions>
 
   <!-- *********************** -->
@@ -51,7 +82,7 @@
   <!-- *********************** -->
   <arena size="20, 20, 2" center="0,0,1">
 
-    <!-- * Exterior walls of the environment * -->
+    <!-- Exterior walls -->
     <box id="wall_north" size="20,0.1,0.5" movable="false">
       <body position="0,10,0" orientation="0,0,0" />
     </box>
@@ -65,15 +96,7 @@
       <body position="-10,0,0" orientation="0,0,0" />
     </box>
 
-    <!-- * Interior walls * -->
-    <!-- <box id="wall_1" size="7,0.1,0.5" movable="false">
-      <body position="-4.4,0,0" orientation="0,0,0" />
-    </box>
-    <box id="wall_2" size="7,0.1,0.5" movable="false">
-      <body position="4.5,0,0" orientation="0,0,0" />
-    </box> -->
-
-    <!-- * Random obstacles in the environment * -->
+    <!-- Random interior obstacles -->
     <distribute>
       <position method="uniform" min="-10,-10,0" max="10,10,0" />
       <orientation method="uniform" min="0,0,0" max="360,0,0" />
@@ -82,7 +105,7 @@
       </entity>
     </distribute>
 
-    <!-- * Initial drones positions * -->
+    <!-- Initial drone positions (random, same as other scenarios) -->
     <distribute>
       <position method="uniform" min="-9,-9,0" max="9,9,0" />
       <orientation method="gaussian" mean="0,0,0" std_dev="360,0,0" />
@@ -99,7 +122,7 @@
   <!-- ******************* -->
   <physics_engines>
     <pointmass3d id="pm3d" />
-    <dynamics2d id="dyn2d" />
+    <dynamics2d  id="dyn2d" />
   </physics_engines>
 
   <!-- ********* -->
@@ -111,21 +134,21 @@
   </media>
 
   <!-- ****************** -->
-  <!-- * Visualization * -->
+  <!-- * Visualization  * -->
   <!-- ****************** -->
+  <!-- Uncomment for interactive runs; comment out for headless batch runs. -->
+  
   <!-- <visualization>
     <qt-opengl>
       <camera>
         <placements>
-          <placement index="0" position="0,0,25" look_at="0,0,0" up="0,1,0" lens_focal_length="20" />
+          <placement index="0" position="0,0,25" look_at="0,0,0"
+                     up="0,1,0" lens_focal_length="20" />
         </placements>
       </camera>
-       <frame_grabbing directory="log/"
-                       base_name="frame_" 
-                       format="png"
-                       quality="100" /> 
       <user_functions label="buzz_qt" show_buzz_editor="false"/>
     </qt-opengl>
   </visualization> -->
+ 
 
 </argos-configuration>

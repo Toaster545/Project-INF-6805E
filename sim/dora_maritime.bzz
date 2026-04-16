@@ -1,0 +1,352 @@
+###
+# Maritime DORA: Drift-aware exploration for moving maritime SAR targets.
+#
+# Navigation policy:
+#   direction = EXPLORATION_GAIN * exploration_gradient
+#             + DRIFT_GAIN       * drift_direction
+#             + SIGHTING_GAIN    * sighting_direction
+#
+# sighting_direction operates in two layers:
+#
+#   Layer 1 — last-known position (one sighting available):
+#     Navigate toward the cell where the target was last detected.
+#     Weight decays linearly to 0 over SIGHTING_DECAY steps.
+#
+#   Layer 2 — predicted future position (two sightings available):
+#     Estimate target velocity from the two most recent sightings and
+#     extrapolate ahead by the time elapsed since the last contact.
+#     This replaces the fixed DRIFT prior with an adaptive estimate
+#     learned from actual observations.
+#
+# Both layers degrade gracefully: Layer 2 falls back to Layer 1 when
+# only one sighting exists; Layer 1 falls back to pure drift-DORA when
+# no sighting has been recorded yet.
+###
+
+include "buzz_includes/buzz_utils/vec2.bzz"
+include "buzz_includes/buzz_utils/string.bzz"
+include "config/DBM-SMS/parameters.bzz"
+include "buzz_includes/DBM-SMS/global_variables.bzz"
+include "buzz_includes/debug.bzz"
+include "buzz_includes/buzz_utils/obstacle_avoidance.bzz"
+
+EXPLORATION_GAIN = 1.0
+
+var stigmergy_exploration
+var stigmergy_sighting
+var target_found = 0
+
+###
+# Logging
+###
+
+function log_metrics() {
+  if (debug.msgqueue != nil) {
+    log_datasize(debug.msgqueue.total, current_step)
+  }
+
+  if (id == 0) {
+    stigmergy_exploration.foreach(function(key, data, robot) {
+      log_datum(key, data * 1.0, current_step)
+    })
+  }
+}
+
+###
+# Stigmergy
+###
+
+function init_stigmergies() {
+  stigmergy_exploration = stigmergy.create(1)
+  stigmergy_exploration.onconflict(function(k, l, r) {
+    if (l > r) { return l }
+    return r
+  })
+
+  # Sighting stigmergy stores up to two contact reports as float keys:
+  #   "t1","x1","y1"  — most recent sighting (step + world position)
+  #   "t0","x0","y0"  — previous sighting, used for velocity estimation
+  # onconflict keeps the larger value; since timestamps only increase,
+  # this ensures the most recent sighting always wins.
+  stigmergy_sighting = stigmergy.create(2)
+  stigmergy_sighting.onconflict(function(k, l, r) {
+    if (l > r) { return l }
+    return r
+  })
+}
+
+function update_exploration() {
+  stigmergy_exploration.put(get_current_key(), current_step)
+}
+
+function update_sighting() {
+  t1 = stigmergy_sighting.get("t1")
+
+  # Only shift the current sighting to "previous" when enough time has
+  # passed that the target has moved a measurable distance between the
+  # two contact reports (SIGHTING_MIN_GAP steps).
+  # NOTE: nested ifs are required because Buzz does not short-circuit `and`,
+  # so `current_step - t1` would be evaluated even when t1 == nil.
+  if (t1 != nil) {
+    if (current_step - t1 > SIGHTING_MIN_GAP) {
+      x1 = stigmergy_sighting.get("x1")
+      y1 = stigmergy_sighting.get("y1")
+      if (x1 != nil and y1 != nil) {
+        stigmergy_sighting.put("t0", t1)
+        stigmergy_sighting.put("x0", x1)
+        stigmergy_sighting.put("y0", y1)
+      }
+    }
+  }
+
+  # Record the new contact.
+  stigmergy_sighting.put("t1", current_step * 1.0)
+  stigmergy_sighting.put("x1", pose.position.x)
+  stigmergy_sighting.put("y1", pose.position.y)
+}
+
+###
+# Spatial helpers
+###
+
+function get_adjacent_key(i, j) {
+  split_key = string.split(get_current_key(), "_")
+  key_x = string.toint(split_key[0]) + i
+  key_y = string.toint(split_key[1]) + j
+  return string.concat(string.tostring(key_x), "_", string.tostring(key_y))
+}
+
+function get_adjacent_position(i, j) {
+  split_key = string.split(get_current_key(), "_")
+  x = string.toint(split_key[0]) + i
+  y = string.toint(split_key[1]) + j
+  return math.vec2.new(x, y)
+}
+
+function position_in_bounds(position) {
+  return position.x <= SEARCH_SPACE.maxx and
+         position.x >= SEARCH_SPACE.minx and
+         position.y <= SEARCH_SPACE.maxy and
+         position.y >= SEARCH_SPACE.miny
+}
+
+function safe_normalize(vector) {
+  if (vector.x == 0 and vector.y == 0) {
+    return vector
+  }
+  return math.vec2.norm(vector)
+}
+
+###
+# Exploration gradient
+###
+
+function exploration_gradient_fn(adjacent_key, i, j) {
+  if (position_in_bounds(get_adjacent_position(i, j))) {
+    t = stigmergy_exploration.get(adjacent_key)
+    if (t != nil) {
+      return current_step - t
+    }
+    return current_step
+  }
+  return 0.0
+}
+
+###
+# Generic 8-neighbour gradient computation
+###
+
+function gradient(gradient_function) {
+  var i = -1
+  var gradient_vec = math.vec2.new(0.0, 0.0)
+
+  while (i <= 1) {
+    var j = -1
+    while (j <= 1) {
+      if (not(i == 0 and j == 0)) {
+        g = gradient_function(get_adjacent_key(i, j), i, j)
+        contribution = math.vec2.scale(math.vec2.norm(math.vec2.new(i, j)), g)
+        gradient_vec = math.vec2.add(gradient_vec, contribution)
+      }
+      j = j + 1
+    }
+    i = i + 1
+  }
+
+  if (math.abs(math.vec2.length(gradient_vec)) < 0.1) {
+    return math.vec2.new(0.0, 0.0)
+  }
+  return safe_normalize(gradient_vec)
+}
+
+###
+# Sighting direction
+#
+# Returns a world-frame unit vector toward the target's predicted position.
+#
+# Layer 2 (two sightings): estimate velocity from (x0,y0,t0) and (x1,y1,t1),
+#   cap it at a sensible maximum, and extrapolate by the elapsed time.
+# Layer 1 (one sighting): navigate directly to (x1,y1).
+# No sighting: return zero vector (caller treats as no contribution).
+###
+
+function compute_sighting_direction() {
+  t1 = stigmergy_sighting.get("t1")
+  x1 = stigmergy_sighting.get("x1")
+  y1 = stigmergy_sighting.get("y1")
+
+  if (t1 == nil or x1 == nil or y1 == nil) {
+    return math.vec2.new(0.0, 0.0)
+  }
+
+  age = current_step - t1
+  if (age >= SIGHTING_DECAY) {
+    return math.vec2.new(0.0, 0.0)
+  }
+
+  pred_x = x1
+  pred_y = y1
+
+  # Layer 2: refine prediction with estimated velocity if a previous
+  # sighting exists and is older than SIGHTING_MIN_GAP.
+  t0 = stigmergy_sighting.get("t0")
+  x0 = stigmergy_sighting.get("x0")
+  y0 = stigmergy_sighting.get("y0")
+
+  if (t0 != nil and x0 != nil and y0 != nil) {
+    if (t1 - t0 > 0) {
+      dt = t1 - t0
+      vx = (x1 - x0) / dt
+      vy = (y1 - y0) / dt
+
+      # Cap estimated velocity to avoid extrapolating on noisy outliers.
+      # 0.1 m/step is 5x the typical ocean drift and covers fast targets.
+      v_vec = math.vec2.new(vx, vy)
+      v_len = math.vec2.length(v_vec)
+      if (v_len > 0.1) {
+        v_vec = math.vec2.scale(safe_normalize(v_vec), 0.1)
+        vx = v_vec.x
+        vy = v_vec.y
+      }
+
+      pred_x = x1 + vx * age
+      pred_y = y1 + vy * age
+
+      # Clamp to arena so robots don't chase an out-of-bounds prediction.
+      if (pred_x < SEARCH_SPACE.minx) { pred_x = SEARCH_SPACE.minx }
+      if (pred_x > SEARCH_SPACE.maxx) { pred_x = SEARCH_SPACE.maxx }
+      if (pred_y < SEARCH_SPACE.miny) { pred_y = SEARCH_SPACE.miny }
+      if (pred_y > SEARCH_SPACE.maxy) { pred_y = SEARCH_SPACE.maxy }
+    }
+  }
+
+  dir = math.vec2.new(pred_x - pose.position.x, pred_y - pose.position.y)
+  if (math.vec2.length(dir) < 0.5) {
+    return math.vec2.new(0.0, 0.0)
+  }
+  return safe_normalize(dir)
+}
+
+###
+# Movement: exploration + drift bias + sighting bias + obstacle avoidance
+###
+
+function move() {
+  exploration = math.vec2.scale(gradient(exploration_gradient_fn), EXPLORATION_GAIN)
+
+  # Drift bias.
+  drift_raw = math.vec2.new(DRIFT_X, DRIFT_Y)
+  if (math.vec2.length(drift_raw) > 0.0) {
+    drift = math.vec2.scale(safe_normalize(drift_raw), DRIFT_GAIN)
+  } else {
+    drift = math.vec2.new(0.0, 0.0)
+  }
+
+  # Sighting bias: decaying weight toward predicted target position.
+  sighting_dir = compute_sighting_direction()
+  t1 = stigmergy_sighting.get("t1")
+  if (math.vec2.length(sighting_dir) > 0.0 and t1 != nil) {
+    age    = current_step - t1
+    weight = (SIGHTING_DECAY - age) * 1.0 / SIGHTING_DECAY
+    sighting = math.vec2.scale(sighting_dir, SIGHTING_GAIN * weight)
+  } else {
+    sighting = math.vec2.new(0.0, 0.0)
+  }
+
+  if (close_to_obstacle()) {
+    obstacle_avoidance = avoid_obstacle()
+  } else {
+    obstacle_avoidance = math.vec2.new(0.0, 0.0)
+  }
+
+  # Rotate world-frame vectors into robot-local frame before combining.
+  if (exploration.x != 0.0 or exploration.y != 0.0) {
+    exploration_local = math.vec2.rotate(exploration, -pose.orientation.yaw)
+  } else {
+    exploration_local = math.vec2.new(1.0, 0.0)
+  }
+
+  if (drift.x != 0.0 or drift.y != 0.0) {
+    drift_local = math.vec2.rotate(drift, -pose.orientation.yaw)
+  } else {
+    drift_local = math.vec2.new(0.0, 0.0)
+  }
+
+  if (sighting.x != 0.0 or sighting.y != 0.0) {
+    sighting_local = math.vec2.rotate(sighting, -pose.orientation.yaw)
+  } else {
+    sighting_local = math.vec2.new(0.0, 0.0)
+  }
+
+  combined = math.vec2.add(math.vec2.add(exploration_local, drift_local), sighting_local)
+  combined_with_avoidance = safe_normalize(math.vec2.add(combined, obstacle_avoidance))
+  scaled = math.vec2.scale(combined_with_avoidance, SEARCH_SPEED)
+
+  gotoc(scaled.x, scaled.y)
+}
+
+###
+# ARGoS lifecycle
+###
+
+function init() {
+  show_colored_trajectory(NUMBER_OF_ROBOTS)
+  set_leds(0, 255, 0)
+  init_stigmergies()
+  target_found = 0
+  math.rng.setseed(id)
+}
+
+function step() {
+  if (current_step < EXPERIMENT_LENGHT) {
+
+    if (is_target_detected()) {
+      update_sighting()
+      if (target_found == 0) {
+        target_found = 1
+        log("Robot ", id, ": Target detected at step ", current_step)
+        set_leds(0, 0, 255)
+      }
+    }
+
+    if (current_step % NEW_POSE_DELAY) {
+      update_exploration()
+      move()
+      update_previous_sensor_readings()
+    }
+
+    log_metrics()
+  }
+
+  if (current_step >= EXPERIMENT_LENGHT) {
+    set_wheels(0.0, 0.0)
+  }
+
+  current_step = current_step + 1
+}
+
+function reset() {
+}
+
+function destroy() {
+}

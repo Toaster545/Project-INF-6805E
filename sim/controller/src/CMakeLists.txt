@@ -30,17 +30,20 @@ if(ARGOS_FOUND)
 endif(ARGOS_FOUND)
 
 set(ARGOS_BUZZ_SOURCES
-  utils/buzz_utils.h  
-  argos/buzz_controller_drone_sim.h       
-  argos/buzz_controller_drone_sim.cpp     
+  utils/buzz_utils.h
+  argos/buzz_controller_drone_sim.h
+  argos/buzz_controller_drone_sim.cpp
   argos/buzz_closures_drone_sim.cpp
-  argos/radiation_source.h       
-  argos/radiation_source.cpp   )
+  argos/radiation_source.h
+  argos/radiation_source.cpp
+  argos/maritime_target.h
+  argos/maritime_target.cpp   )
 
 add_library(argos3plugin_buzz_simulator_drone SHARED ${ARGOS_BUZZ_SOURCES})
 target_link_libraries(argos3plugin_buzz_simulator_drone
   argos3core_simulator
   argos3plugin_simulator_genericrobot
+  argos3plugin_simulator_kheperaiv
   argos3plugin_simulator_spiri
   argos3plugin_simulator_buzz
   buzz
