@@ -161,3 +161,13 @@ RUN cd /home/docker/DBM-SMS/sim &&\
     bzzc dora.bzz &&\
     bzzc frontier.bzz &&\
     bzzc randomwalk.bzz
+
+# this to try fixing some issues with graphics card usage
+RUN apt-get update && apt-get install -y \
+    libglvnd0 \
+    libgl1 \
+    libglx0 \
+    libegl1 \
+    libxext6 \
+    libx11-6 \
+    mesa-utils

@@ -46,6 +46,7 @@ target_link_libraries(argos3plugin_buzz_simulator_drone
   argos3plugin_simulator_kheperaiv
   argos3plugin_simulator_spiri
   argos3plugin_simulator_buzz
+  argos3plugin_loop_functions
   buzz
   jsoncpp
   )
