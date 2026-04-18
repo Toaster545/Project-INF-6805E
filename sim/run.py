@@ -9,19 +9,21 @@ Before running:
     before running the other scenario so files are not overwritten.
 """
 
-import subprocess
-import time
 import os
 import shutil
+import subprocess
+import time
 
 # ── Configuration ──────────────────────────────────────────────
-SCENARIO      = "dora"        # "dora" or "randomwalk"
-NB_RUNS       = 10
-PARALLEL      = True
-STAGGER_DELAY = 2             # seconds between process launches (avoid seed collision)
+SCENARIO = "randomwalk"  # "dora" or "randomwalk"
+NB_RUNS = 10
+PARALLEL = True
+STAGGER_DELAY = 2  # seconds between process launches (avoid seed collision)
 # ──────────────────────────────────────────────────────────────
 
-ARGOS_FILE = f"{SCENARIO}_maritime.argos" if SCENARIO == "randomwalk" else "maritime.argos"
+ARGOS_FILE = (
+    f"{SCENARIO}_maritime.argos" if SCENARIO == "randomwalk" else "maritime.argos"
+)
 RESULT_DIR = f"../results/{SCENARIO}_maritime/"
 
 os.makedirs(RESULT_DIR, exist_ok=True)
@@ -47,8 +49,9 @@ def main():
     if PARALLEL:
         processes = []
         for i in range(NB_RUNS):
-            p = subprocess.Popen(command, shell=True,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p = subprocess.Popen(
+                command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
             processes.append(p)
             print(f"Started run #{i}  (pid {p.pid})")
             time.sleep(STAGGER_DELAY)
@@ -64,8 +67,9 @@ def main():
             move_results(i)
     else:
         for i in range(NB_RUNS):
-            p = subprocess.Popen(command, shell=True,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p = subprocess.Popen(
+                command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
             _, stderr = p.communicate()
             if p.returncode != 0:
                 print(f"Run #{i} FAILED (code {p.returncode})")

@@ -171,3 +171,18 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libx11-6 \
     mesa-utils
+    
+
+# Install system-level dependencies for Matplotlib/Pillow
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    zlib1g-dev \
+    libjpeg-dev \
+    libfreetype6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip first (helps avoid building from source)
+RUN pip3 install --upgrade pip setuptools
+
+# Use pip3 to install dependencies
+RUN pip3 install matplotlib scipy seaborn

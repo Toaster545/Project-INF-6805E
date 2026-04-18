@@ -138,7 +138,7 @@
   <!-- ****************** -->
   <!-- Uncomment for interactive runs; comment out for headless batch runs. -->
   
-  <!-- <visualization>
+   <visualization>
     <qt-opengl>
       <camera>
         <placements>
@@ -148,7 +148,7 @@
       </camera>
       <user_functions label="buzz_qt" show_buzz_editor="false"/>
     </qt-opengl>
-  </visualization> -->
+  </visualization> 
  
 
 </argos-configuration>

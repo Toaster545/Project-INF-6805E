@@ -14,23 +14,30 @@
 #   5. Data transmitted per robot over time
 ###
 
-import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')
-import numpy as np
+import matplotlib.pyplot as plt
+
+matplotlib.use("Agg")
 from os import listdir
-from os.path import isfile, join, exists
+from os.path import exists, isfile, join
+
+import numpy as np
 
 ### Parameters
-result_folder_random = "../results/randomwalk_maritime/"
-result_folder_dora   = "../results/dora_maritime/"
-figures_folder       = "figures/"
-NUMBER_OF_STEPS      = 300   # must match experiment length in .argos
+result_folder_random = "../../results/randomwalk_maritime/"
+result_folder_dora = "../../results/dora_maritime/"
+figures_folder = "figures/"
+import os
+
+print(f"Current Working Directory: {os.getcwd()}")
+print(f"Checking path: {os.path.abspath(result_folder_dora)}")
+
+NUMBER_OF_STEPS = 300  # must match experiment length in .argos
 ###
 
-FOLDERS      = [result_folder_random, result_folder_dora]
-LABELS       = ["Random Walk", "DORA Maritime"]
-COLORS       = ["lightcoral", "cornflowerblue"]
+FOLDERS = [result_folder_random, result_folder_dora]
+LABELS = ["Random Walk", "DORA Maritime"]
+COLORS = ["lightcoral", "cornflowerblue"]
 
 
 def count_runs(folder):
@@ -38,7 +45,9 @@ def count_runs(folder):
     if not exists(folder):
         return 0
     files = [f for f in listdir(folder) if isfile(join(folder, f))]
-    det_count = sum(1 for f in files if f.startswith("detections") and f.endswith(".csv"))
+    det_count = sum(
+        1 for f in files if f.startswith("detections") and f.endswith(".csv")
+    )
     return det_count
 
 
@@ -55,11 +64,12 @@ def read_detections(path):
             line = line.strip()
             if not line:
                 continue
-            parts = line.split(',')
+            parts = line.split(",")
             if len(parts) < 4:
                 continue
-            rows.append([float(parts[0]), float(parts[1]),
-                         float(parts[2]), float(parts[3])])
+            rows.append(
+                [float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])]
+            )
     return np.array(rows) if rows else np.empty((0, 4))
 
 
@@ -76,7 +86,7 @@ def read_coverage(path):
             line = line.strip()
             if not line:
                 continue
-            parts = line.split(',')
+            parts = line.split(",")
             if len(parts) < 5:
                 continue
             steps.append(float(parts[4]))
@@ -97,7 +107,7 @@ def read_data_transmitted(path):
             line = line.strip()
             if not line:
                 continue
-            parts = line.split(',')
+            parts = line.split(",")
             if len(parts) < 3:
                 continue
             total_data = float(parts[0])
@@ -118,17 +128,17 @@ if number_of_runs == 0:
 print(f"Processing {number_of_runs} runs per folder.")
 
 # Arrays indexed [folder, run, step]
-ttd                  = np.full((len(FOLDERS), number_of_runs), np.nan)
+ttd = np.full((len(FOLDERS), number_of_runs), np.nan)
 cumulative_detections = np.zeros((len(FOLDERS), number_of_runs, NUMBER_OF_STEPS))
-redetection_rate     = np.zeros((len(FOLDERS), number_of_runs, NUMBER_OF_STEPS))
-coverage             = np.zeros((len(FOLDERS), number_of_runs, NUMBER_OF_STEPS))
-data_transmitted     = np.zeros((len(FOLDERS), number_of_runs, NUMBER_OF_STEPS))
+redetection_rate = np.zeros((len(FOLDERS), number_of_runs, NUMBER_OF_STEPS))
+coverage = np.zeros((len(FOLDERS), number_of_runs, NUMBER_OF_STEPS))
+data_transmitted = np.zeros((len(FOLDERS), number_of_runs, NUMBER_OF_STEPS))
 
 for fi, folder in enumerate(FOLDERS):
     print(f"--- {folder} ---")
     for run in range(number_of_runs):
-        det_file  = folder + f"detections{run}.csv"
-        res_file  = folder + f"result{run}.csv"
+        det_file = folder + f"detections{run}.csv"
+        res_file = folder + f"result{run}.csv"
         data_file = folder + f"data_transmitted{run}.csv"
 
         # ── Detections ──────────────────────────────────────────
@@ -175,15 +185,15 @@ print("\n=== Summary ===")
 for fi, label in enumerate(LABELS):
     valid_ttd = ttd[fi][~np.isnan(ttd[fi])]
     detected_runs = len(valid_ttd)
-    mean_ttd = np.mean(valid_ttd) if detected_runs > 0 else float('nan')
-    std_ttd  = np.std(valid_ttd)  if detected_runs > 0 else float('nan')
+    mean_ttd = np.mean(valid_ttd) if detected_runs > 0 else float("nan")
+    std_ttd = np.std(valid_ttd) if detected_runs > 0 else float("nan")
 
     final_redet = redetection_rate[fi, :, NUMBER_OF_STEPS - 1]
-    mean_redet  = np.nanmean(final_redet)
-    std_redet   = np.nanstd(final_redet)
+    mean_redet = np.nanmean(final_redet)
+    std_redet = np.nanstd(final_redet)
 
-    final_cov  = coverage[fi, :, NUMBER_OF_STEPS - 1]
-    mean_cov   = np.nanmean(final_cov)
+    final_cov = coverage[fi, :, NUMBER_OF_STEPS - 1]
+    mean_cov = np.nanmean(final_cov)
 
     print(f"\n{label}:")
     print(f"  Runs with detection : {detected_runs}/{number_of_runs}")
@@ -203,12 +213,11 @@ def plot_metric(data, ylabel, filename, use_log=False):
     fig, ax = plt.subplots()
     for fi in range(len(FOLDERS)):
         mean = data[fi].mean(axis=0)
-        std  = 0.5 * data[fi].std(axis=0)
+        std = 0.5 * data[fi].std(axis=0)
         ax.plot(x_axis, mean, color=COLORS[fi], label=LABELS[fi])
-        ax.fill_between(x_axis, mean - std, mean + std,
-                        alpha=0.25, color=COLORS[fi])
+        ax.fill_between(x_axis, mean - std, mean + std, alpha=0.25, color=COLORS[fi])
     if use_log:
-        ax.set_yscale('log')
+        ax.set_yscale("log")
     ax.set_xlabel("Step")
     ax.set_ylabel(ylabel)
     ax.legend()
@@ -217,29 +226,36 @@ def plot_metric(data, ylabel, filename, use_log=False):
     plt.close()
 
 
-plot_metric(cumulative_detections, "Cumulative detections",
-            "cumulative_detections.png")
+plot_metric(cumulative_detections, "Cumulative detections", "cumulative_detections.png")
 
-plot_metric(redetection_rate, "Re-detection rate (fraction of steps with contact)",
-            "redetection_rate.png")
+plot_metric(
+    redetection_rate,
+    "Re-detection rate (fraction of steps with contact)",
+    "redetection_rate.png",
+)
 
-plot_metric(coverage, "Cumulative cells explored",
-            "coverage.png")
+plot_metric(coverage, "Cumulative cells explored", "coverage.png")
 
-plot_metric(data_transmitted / 1000.0, "Data transmitted per robot (kB)",
-            "transmitted.png")
+plot_metric(
+    data_transmitted / 1000.0, "Data transmitted per robot (kB)", "transmitted.png"
+)
 
 
 # TTD distribution (box plot)
 fig, ax = plt.subplots()
 valid = [ttd[fi][~np.isnan(ttd[fi])] for fi in range(len(FOLDERS))]
-ax.boxplot(valid, labels=LABELS, patch_artist=True,
-           boxprops=dict(facecolor='white'),
-           medianprops=dict(color='black'))
+ax.boxplot(
+    valid,
+    labels=LABELS,
+    patch_artist=True,
+    boxprops=dict(facecolor="white"),
+    medianprops=dict(color="black"),
+)
 for fi, v in enumerate(valid):
     jitter = np.random.uniform(-0.1, 0.1, size=len(v))
-    ax.scatter(np.full(len(v), fi + 1) + jitter, v,
-               color=COLORS[fi], alpha=0.6, zorder=3)
+    ax.scatter(
+        np.full(len(v), fi + 1) + jitter, v, color=COLORS[fi], alpha=0.6, zorder=3
+    )
 ax.set_ylabel("Step of first detection")
 ax.set_title("Time to First Detection")
 plt.tight_layout()

@@ -1,4 +1,0 @@
-*.txt
-*.csv
-!random-walk-final/*
-!gradient-final/*
