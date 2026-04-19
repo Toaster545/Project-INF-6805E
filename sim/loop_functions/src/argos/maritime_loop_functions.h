@@ -37,6 +37,9 @@ public:
     /* Controller queries this to check whether it is within detection range. */
     const MaritimeTarget& GetTarget() const { return *target_; }
 
+    float GetTargetX() const { return target_->GetPosition().GetX(); }
+    float GetTargetY() const { return target_->GetPosition().GetY(); }
+
     /* Log every detection event for re-detection metrics. */
     void LogDetection(UInt32 step, UInt32 robot_id);
 

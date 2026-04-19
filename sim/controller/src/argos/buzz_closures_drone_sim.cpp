@@ -173,6 +173,22 @@ static int BuzzGetCurrentKey(buzzvm_t vm){
 /****************************************/
 /****************************************/
 
+static int BuzzGetTargetX(buzzvm_t vm){
+   buzzvm_pushs(vm, buzzvm_string_register(vm, "controller", 1));
+   buzzvm_gload(vm);
+   float x = reinterpret_cast<CBuzzControllerDroneSim*>(buzzvm_stack_at(vm, 1)->u.value)->GetTargetX();
+   buzzvm_pushf(vm, x);
+   return buzzvm_ret1(vm);
+}
+
+static int BuzzGetTargetY(buzzvm_t vm){
+   buzzvm_pushs(vm, buzzvm_string_register(vm, "controller", 1));
+   buzzvm_gload(vm);
+   float y = reinterpret_cast<CBuzzControllerDroneSim*>(buzzvm_stack_at(vm, 1)->u.value)->GetTargetY();
+   buzzvm_pushf(vm, y);
+   return buzzvm_ret1(vm);
+}
+
 static int BuzzIsTargetDetected(buzzvm_t vm){
    /* Get pointer to the controller */
    buzzvm_pushs(vm, buzzvm_string_register(vm, "controller", 1));
@@ -326,6 +342,14 @@ buzzvm_state CBuzzControllerDroneSim::RegisterFunctions() {
 
    buzzvm_pushs(m_tBuzzVM, buzzvm_string_register(m_tBuzzVM, "get_radiation_intensity", 1));
    buzzvm_pushcc(m_tBuzzVM, buzzvm_function_register(m_tBuzzVM, BuzzGetRadiationIntensity));
+   buzzvm_gstore(m_tBuzzVM);
+
+   buzzvm_pushs(m_tBuzzVM, buzzvm_string_register(m_tBuzzVM, "get_target_x", 1));
+   buzzvm_pushcc(m_tBuzzVM, buzzvm_function_register(m_tBuzzVM, BuzzGetTargetX));
+   buzzvm_gstore(m_tBuzzVM);
+
+   buzzvm_pushs(m_tBuzzVM, buzzvm_string_register(m_tBuzzVM, "get_target_y", 1));
+   buzzvm_pushcc(m_tBuzzVM, buzzvm_function_register(m_tBuzzVM, BuzzGetTargetY));
    buzzvm_gstore(m_tBuzzVM);
 
    buzzvm_pushs(m_tBuzzVM, buzzvm_string_register(m_tBuzzVM, "is_target_detected", 1));

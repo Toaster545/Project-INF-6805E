@@ -43,6 +43,8 @@ public:
    /* Returns true when this robot is within detection range of the maritime
     * target.  Every positive detection is logged to detections{N}.csv. */
    bool IsTargetDetected();
+   float GetTargetX();
+   float GetTargetY();
 
    void LogDatum(const std::string& key, const float& data, const int& step);
 

@@ -29,15 +29,17 @@ CBuzzControllerDroneSim::CBuzzControllerDroneSim() : CBuzzControllerKheperaIV() 
       std::chrono::high_resolution_clock::now() -  previous);
    random_engine_.seed(duration.count());
 
-   // Find experiment number and file
-   int experiment_number = -1;
-   std::string file_name;
-   do {
-      experiment_number++;
-      result_file_name_ = RESULT_FILE + std::to_string( experiment_number ) + ".csv";
-   } while( std::ifstream(result_file_name_).good() );
+   // All robots in the same run share one experiment number, computed once.
+   static int experiment_number = -1;
+   if (experiment_number == -1) {
+      experiment_number = 0;
+      while (std::ifstream(RESULT_FILE + std::to_string(experiment_number) + ".csv").good()) {
+         ++experiment_number;
+      }
+   }
+   result_file_name_         = RESULT_FILE          + std::to_string(experiment_number) + ".csv";
    data_transmitted_file_name_ = DATA_TRANSMITTED_FILE + std::to_string(experiment_number) + ".csv";
-   radiation_file_name_  = RADIATION_SOURCES_FILE + std::to_string(experiment_number) + ".json";
+   radiation_file_name_      = RADIATION_SOURCES_FILE + std::to_string(experiment_number) + ".json";
    target_found_ = false;
 }
 
@@ -119,6 +121,18 @@ float CBuzzControllerDroneSim::GetRadiationIntensity(){
 /****************************************/
 /****************************************/
 
+float CBuzzControllerDroneSim::GetTargetX() {
+   CMaritimeLoopFunctions& lf = dynamic_cast<CMaritimeLoopFunctions&>(
+      CSimulator::GetInstance().GetLoopFunctions());
+   return lf.GetTargetX();
+}
+
+float CBuzzControllerDroneSim::GetTargetY() {
+   CMaritimeLoopFunctions& lf = dynamic_cast<CMaritimeLoopFunctions&>(
+      CSimulator::GetInstance().GetLoopFunctions());
+   return lf.GetTargetY();
+}
+
 bool CBuzzControllerDroneSim::IsTargetDetected() {
    CMaritimeLoopFunctions& loop_functions =
       dynamic_cast<CMaritimeLoopFunctions&>(
@@ -150,6 +164,7 @@ void CBuzzControllerDroneSim::LogDatum(const std::string& key, const float& data
 
    float weight = 1.0;
    result_file_ << x << "," << y << "," << data << "," << weight << "," << step << "," << m_unRobotId << "\n";
+   result_file_.flush();
 }
 
 /****************************************/
@@ -157,6 +172,7 @@ void CBuzzControllerDroneSim::LogDatum(const std::string& key, const float& data
 
 void CBuzzControllerDroneSim::LogDataSize(const int& total_data, const int& step){
    data_transmitted_file_ << total_data << "," << step << "," << m_unRobotId << "\n";
+   data_transmitted_file_.flush();
 }
 
 }

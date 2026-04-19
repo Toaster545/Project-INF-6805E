@@ -35,6 +35,7 @@ EXPLORATION_GAIN = 1.0
 var stigmergy_exploration
 var stigmergy_sighting
 var target_found = 0
+var currently_detecting = 0
 
 ###
 # Logging
@@ -43,6 +44,10 @@ var target_found = 0
 function log_metrics() {
   if (debug.msgqueue != nil) {
     log_datasize(debug.msgqueue.total, current_step)
+  } else {
+    if (current_step == 1) {
+      log("Robot ", id, ": debug.msgqueue is nil — data_transmitted will be empty")
+    }
   }
 
   if (id == 0) {
@@ -241,20 +246,62 @@ function compute_sighting_direction() {
   }
 
   dir = math.vec2.new(pred_x - pose.position.x, pred_y - pose.position.y)
-  if (math.vec2.length(dir) < 0.5) {
+  if (math.vec2.length(dir) < 0.1) {
     return math.vec2.new(0.0, 0.0)
   }
   return safe_normalize(dir)
 }
 
 ###
-# Movement: exploration + drift bias + sighting bias + obstacle avoidance
+# Movement
 ###
 
+function apply_goal(goal_world) {
+  if (close_to_obstacle()) {
+    avoidance = avoid_obstacle()
+  } else {
+    avoidance = math.vec2.new(0.0, 0.0)
+  }
+  if (goal_world.x != 0.0 or goal_world.y != 0.0) {
+    goal_local = math.vec2.rotate(goal_world, -pose.orientation.yaw)
+  } else {
+    goal_local = math.vec2.new(1.0, 0.0)
+  }
+  combined = safe_normalize(math.vec2.add(goal_local, avoidance))
+  gotoc(combined.x * SEARCH_SPEED, combined.y * SEARCH_SPEED)
+}
+
 function move() {
+  # ── Tracker: detected the target at some point ──────────────────────────
+  if (target_found == 1) {
+    if (currently_detecting == 1) {
+      # In range: navigate directly toward the actual target position.
+      tx = get_target_x()
+      ty = get_target_y()
+      dir = math.vec2.new(tx - pose.position.x, ty - pose.position.y)
+      if (math.vec2.length(dir) > 0.1) {
+        apply_goal(safe_normalize(dir))
+      } else {
+        apply_goal(math.vec2.new(0.0, 0.0))
+      }
+    } else {
+      # Out of range: reacquire via sighting extrapolation.
+      sighting_dir = compute_sighting_direction()
+      t1 = stigmergy_sighting.get("t1")
+      if (math.vec2.length(sighting_dir) > 0.0 and t1 != nil) {
+        age    = current_step - t1
+        weight = (SIGHTING_DECAY - age) * 1.0 / SIGHTING_DECAY
+        apply_goal(math.vec2.scale(sighting_dir, SIGHTING_GAIN * weight))
+      } else {
+        apply_goal(gradient(exploration_gradient_fn))
+      }
+    }
+    return
+  }
+
+  # ── Explorer: has not yet detected the target ────────────────────────────
   exploration = math.vec2.scale(gradient(exploration_gradient_fn), EXPLORATION_GAIN)
 
-  # Drift bias.
   drift_raw = math.vec2.new(DRIFT_X, DRIFT_Y)
   if (math.vec2.length(drift_raw) > 0.0) {
     drift = math.vec2.scale(safe_normalize(drift_raw), DRIFT_GAIN)
@@ -262,47 +309,14 @@ function move() {
     drift = math.vec2.new(0.0, 0.0)
   }
 
-  # Sighting bias: decaying weight toward predicted target position.
+  # Boost exploration when a sighting exists so explorers spread out faster.
   sighting_dir = compute_sighting_direction()
   t1 = stigmergy_sighting.get("t1")
   if (math.vec2.length(sighting_dir) > 0.0 and t1 != nil) {
-    age    = current_step - t1
-    weight = (SIGHTING_DECAY - age) * 1.0 / SIGHTING_DECAY
-    sighting = math.vec2.scale(sighting_dir, SIGHTING_GAIN * weight)
-  } else {
-    sighting = math.vec2.new(0.0, 0.0)
+    exploration = math.vec2.scale(exploration, EXPLORER_BOOST)
   }
 
-  if (close_to_obstacle()) {
-    obstacle_avoidance = avoid_obstacle()
-  } else {
-    obstacle_avoidance = math.vec2.new(0.0, 0.0)
-  }
-
-  # Rotate world-frame vectors into robot-local frame before combining.
-  if (exploration.x != 0.0 or exploration.y != 0.0) {
-    exploration_local = math.vec2.rotate(exploration, -pose.orientation.yaw)
-  } else {
-    exploration_local = math.vec2.new(1.0, 0.0)
-  }
-
-  if (drift.x != 0.0 or drift.y != 0.0) {
-    drift_local = math.vec2.rotate(drift, -pose.orientation.yaw)
-  } else {
-    drift_local = math.vec2.new(0.0, 0.0)
-  }
-
-  if (sighting.x != 0.0 or sighting.y != 0.0) {
-    sighting_local = math.vec2.rotate(sighting, -pose.orientation.yaw)
-  } else {
-    sighting_local = math.vec2.new(0.0, 0.0)
-  }
-
-  combined = math.vec2.add(math.vec2.add(exploration_local, drift_local), sighting_local)
-  combined_with_avoidance = safe_normalize(math.vec2.add(combined, obstacle_avoidance))
-  scaled = math.vec2.scale(combined_with_avoidance, SEARCH_SPEED)
-
-  gotoc(scaled.x, scaled.y)
+  apply_goal(math.vec2.add(exploration, drift))
 }
 
 ###
@@ -320,7 +334,9 @@ function init() {
 function step() {
   if (current_step < EXPERIMENT_LENGHT) {
 
+    currently_detecting = 0
     if (is_target_detected()) {
+      currently_detecting = 1
       update_sighting()
       if (target_found == 0) {
         target_found = 1
