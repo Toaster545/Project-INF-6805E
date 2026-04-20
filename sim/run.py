@@ -2,11 +2,14 @@
 Runs multiple headless ARGoS maritime experiments.
 
 Before running:
-  - Comment out the <visualization> block in maritime.argos
-  - Set SCENARIO to 'randomwalk' or 'dora' (controls which .argos file is used)
-  - Results are written to results/ by the simulation; move them to the
-    appropriate subfolder (results/randomwalk_maritime/ or results/dora_maritime/)
-    before running the other scenario so files are not overwritten.
+  - Comment out the <visualization> block in the target .argos file.
+  - Set SCENARIO to one of: 'dora', 'dora_baseline', 'randomwalk'
+  - Results land in results/<SCENARIO>_maritime/
+
+Scenarios:
+  dora          — improved DORA with tracker/explorer split (maritime.argos)
+  dora_baseline — plain DORA exploration, no sighting (dora_baseline_maritime.argos)
+  randomwalk    — random walk baseline (randomwalk_maritime.argos)
 """
 
 import os
@@ -15,15 +18,21 @@ import subprocess
 import time
 
 # ── Configuration ──────────────────────────────────────────────
-SCENARIO = "randomwalk"  # "dora" or "randomwalk"
+SCENARIO = "dora"  # "dora", "dora_baseline", or "randomwalk"
 NB_RUNS = 10
 PARALLEL = True
 STAGGER_DELAY = 2  # seconds between process launches (avoid seed collision)
 # ──────────────────────────────────────────────────────────────
 
-ARGOS_FILE = (
-    f"{SCENARIO}_maritime.argos" if SCENARIO == "randomwalk" else "maritime.argos"
-)
+ARGOS_FILES = {
+    "dora":          "maritime.argos",
+    "dora_baseline": "dora_baseline_maritime.argos",
+    "randomwalk":    "randomwalk_maritime.argos",
+}
+if SCENARIO not in ARGOS_FILES:
+    raise ValueError(f"Unknown scenario '{SCENARIO}'. Choose from: {list(ARGOS_FILES)}")
+
+ARGOS_FILE = ARGOS_FILES[SCENARIO]
 RESULT_DIR = f"../results/{SCENARIO}_maritime/"
 
 os.makedirs(RESULT_DIR, exist_ok=True)

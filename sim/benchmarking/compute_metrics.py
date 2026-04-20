@@ -24,20 +24,21 @@ from os.path import exists, isfile, join
 import numpy as np
 
 ### Parameters
-result_folder_random = "../../results/randomwalk_maritime/"
-result_folder_dora = "../../results/dora_maritime/"
-figures_folder = "figures/"
 import os
 
+result_folder_randomwalk   = "../../results/randomwalk_maritime/"
+result_folder_dora_baseline = "../../results/dora_baseline_maritime/"
+result_folder_dora         = "../../results/dora_maritime/"
+figures_folder = "figures/"
+
 print(f"Current Working Directory: {os.getcwd()}")
-print(f"Checking path: {os.path.abspath(result_folder_dora)}")
 
 NUMBER_OF_STEPS = 300  # must match experiment length in .argos
 ###
 
-FOLDERS = [result_folder_random, result_folder_dora]
-LABELS = ["Random Walk", "DORA Maritime"]
-COLORS = ["lightcoral", "cornflowerblue"]
+FOLDERS = [result_folder_randomwalk, result_folder_dora_baseline, result_folder_dora]
+LABELS  = ["Random Walk", "DORA Baseline", "DORA Maritime (improved)"]
+COLORS  = ["lightcoral", "gold", "cornflowerblue"]
 
 
 def count_runs(folder):
