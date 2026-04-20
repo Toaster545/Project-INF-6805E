@@ -6,7 +6,7 @@
   <!-- ************************* -->
   <framework>
     <system threads="30" />
-    <experiment length="300"
+    <experiment length="60"
                 ticks_per_second="5"
                 random_seed="0"/>
   </framework>
@@ -33,7 +33,7 @@
                              show_rays="false" noise_std_dev="0" />
         <positioning         implementation="default" />
       </sensors>
-      <params bytecode_file="dora_maritime.bo" debug_file="dora_maritime.bdb">
+      <params bytecode_file="dora_baseline_maritime.bo" debug_file="dora_baseline_maritime.bdb">
         <wheel_turning hard_turn_angle_threshold="90"
                        soft_turn_angle_threshold="70"
                        no_turn_angle_threshold="0"
@@ -138,7 +138,7 @@
   <!-- ****************** -->
   <!-- Uncomment for interactive runs; comment out for headless batch runs. -->
   
-  <visualization>
+  <!-- <visualization>
     <qt-opengl>
       <camera>
         <placements>
@@ -148,7 +148,7 @@
       </camera>
       <user_functions label="buzz_qt" show_buzz_editor="false"/>
     </qt-opengl>
-  </visualization>
+  </visualization> -->
  
 
 </argos-configuration>

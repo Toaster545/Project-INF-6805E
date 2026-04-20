@@ -112,14 +112,17 @@ void CMaritimeLoopFunctions::PostStep() {
 /****************************************/
 /****************************************/
 
-void CMaritimeLoopFunctions::LogDetection(UInt32 step, UInt32 robot_id) {
-    /* Columns: step, robot_id, target_x, target_y */
+void CMaritimeLoopFunctions::LogDetection(UInt32 step, UInt32 robot_id,
+                                           float robot_x, float robot_y) {
+    /* Columns: step, robot_id, target_x, target_y, robot_x, robot_y */
     std::ofstream f(detection_file_name_, std::ios::out | std::ios::app);
     CVector2 pos = target_->GetPosition();
-    f << step     << ","
-      << robot_id << ","
+    f << step      << ","
+      << robot_id  << ","
       << pos.GetX() << ","
-      << pos.GetY() << "\n";
+      << pos.GetY() << ","
+      << robot_x   << ","
+      << robot_y   << "\n";
 }
 
 /****************************************/

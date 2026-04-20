@@ -40,8 +40,9 @@ public:
     float GetTargetX() const { return target_->GetPosition().GetX(); }
     float GetTargetY() const { return target_->GetPosition().GetY(); }
 
-    /* Log every detection event for re-detection metrics. */
-    void LogDetection(UInt32 step, UInt32 robot_id);
+    /* Log every detection event.
+       Columns: step, robot_id, target_x, target_y, robot_x, robot_y */
+    void LogDetection(UInt32 step, UInt32 robot_id, float robot_x, float robot_y);
 
 private:
     std::unique_ptr<MaritimeTarget> target_;

@@ -18,7 +18,7 @@ import subprocess
 import time
 
 # ── Configuration ──────────────────────────────────────────────
-SCENARIO = "dora"  # "dora", "dora_baseline", or "randomwalk"
+SCENARIO = "randomwalk"  # "dora", "dora_baseline", or "randomwalk"
 NB_RUNS = 10
 PARALLEL = True
 STAGGER_DELAY = 2  # seconds between process launches (avoid seed collision)

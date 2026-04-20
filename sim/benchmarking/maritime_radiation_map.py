@@ -1,99 +1,134 @@
 ###
-# Creation of a heatmap of the belief map contructed by DORA
+# Maritime SAR: visualise where robots think the target is vs where it actually is.
+#
+# Background heatmap: KDE of robot detection positions (= sighting belief density)
+# Red dots          : actual target positions at each detection event
+# Blue x markers    : robot positions at detection (what the sighting stigmergy stores)
+# Purple lines      : error between belief and reality per detection event
+#
+# Detection file columns: step, robot_id, target_x, target_y, robot_x, robot_y
 ###
-import json
-import math
-from os import listdir
-from os.path import isfile, join
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 import numpy as np
-import seaborn as sns
+from scipy.stats import gaussian_kde
+from os.path import exists
 
 ### Parameters
-# result_folder_frontier = "../../results/frontier/"
-result_folder_random = "../../results/randomwalk_maritime/"
-result_folder_dora = "../../results/dora_maritime/"
-radiation_sources_folder = "../data/"
+result_folder = "../../results/dora_maritime/"
 figures_folder = "figures/"
-number_of_steps_max = 300
-map_size = 16
-folders = [result_folder_random, result_folder_dora]  # omit result_folder_frontier,
+ARENA_HALF    = 8       # exploration stigmergy runs from -8 to +8
+NUMBER_OF_STEPS = 300
 ###
 
-onlyfiles0 = [
-    f for f in listdir(result_folder_dora) if isfile(join(result_folder_dora, f))
-]
-onlyfiles1 = [
-    f for f in listdir(result_folder_dora) if isfile(join(result_folder_dora, f))
-]
-number_of_runs = int(min(len(onlyfiles0) / 2, len(onlyfiles1) / 2))
-number_of_folders = len(folders)
+def read_detections(path):
+    """
+    Returns list of dicts with keys: step, robot_id, target_x, target_y,
+    robot_x, robot_y.  Handles both the old 4-column format and the new
+    6-column format gracefully.
+    """
+    rows = []
+    if not exists(path):
+        return rows
+    with open(path) as f:
+        for line in f:
+            parts = line.strip().split(",")
+            if len(parts) < 4:
+                continue
+            row = {
+                "step":     float(parts[0]),
+                "robot_id": int(float(parts[1])),
+                "target_x": float(parts[2]),
+                "target_y": float(parts[3]),
+                "robot_x":  float(parts[4]) if len(parts) > 4 else None,
+                "robot_y":  float(parts[5]) if len(parts) > 5 else None,
+            }
+            rows.append(row)
+    return rows
 
-for folder in range(0, number_of_folders):
-    print("---Processing folder " + folders[folder] + "---")
-    for run in range(0, number_of_runs):
-        # Files names
-        result_file = folders[folder] + "result" + str(run) + ".csv"
-        radiation_sources_file = (
-            radiation_sources_folder + "radiation_sources" + str(run) + ".json"
-        )
-        print("------- RUN " + str(run) + " -------")
+# ── Find how many runs are available ────────────────────────────────────────
+run = 0
+available = []
+while exists(result_folder + f"detections{run}.csv") or \
+      exists(result_folder + f"result{run}.csv"):
+    available.append(run)
+    run += 1
 
-        # Read radiation results.
-        f = open(result_file, "r")
-        result_X = np.array([])
-        result_Y = np.array([])
-        result_belief = np.array([])
-        lines = f.readlines()
-        for line in lines:
-            elems = line.split(",")
-            result_X = np.append(result_X, int(elems[0]))
-            result_Y = np.append(result_Y, int(elems[1]))
-            result_belief = np.append(result_belief, float(elems[2]))
+if not available:
+    print(f"No result files found in {result_folder}")
+    exit(1)
 
-        # Read the radiation sources
-        radiation_X = np.array([])
-        radiation_Y = np.array([])
-        radiation_intensity = np.array([])
-        with open(radiation_sources_file) as json_file:
-            data = json.load(json_file)
-            for r in data["sources"]:
-                radiation_X = np.append(radiation_X, float(r["x"]))
-                radiation_Y = np.append(radiation_Y, float(r["y"]))
-                radiation_intensity = np.append(
-                    radiation_intensity, float(r["intensity"])
-                )
+print(f"Found {len(available)} run(s) in {result_folder} - aggregating all runs")
 
-        # Plot results
-        belief_map = np.zeros((map_size + 1, map_size + 1))
-        for i in range(len(result_belief)):
-            belief_map[
-                int(result_Y[i] + map_size / 2), int(result_X[i] + map_size / 2)
-            ] = result_belief[i]
+# ── Collect detections from all runs ─────────────────────────────────────────
+all_detections = []
+for run in available:
+    all_detections.extend(read_detections(result_folder + f"detections{run}.csv"))
 
-        plot = sns.heatmap(belief_map, xticklabels=5, yticklabels=5, cmap="Blues")
-        plot.invert_yaxis()
-        plot.scatter(
-            radiation_X + map_size / 2,
-            radiation_Y + map_size / 2,
-            marker="*",
-            s=100,
-            color="red",
-        )
+if not all_detections:
+    print("No detection events found.")
+    exit(1)
 
-        # Drawing the frame
-        for _, spine in plot.spines.items():
-            spine.set_visible(True)
-            spine.set_linewidth(1)
+steps     = np.array([d["step"]     for d in all_detections])
+target_xs = np.array([d["target_x"] for d in all_detections])
+target_ys = np.array([d["target_y"] for d in all_detections])
+have_robot_pos = all_detections[0]["robot_x"] is not None
+if have_robot_pos:
+    robot_xs = np.array([d["robot_x"] for d in all_detections])
+    robot_ys = np.array([d["robot_y"] for d in all_detections])
 
-        # Save heatmap
-        plot.figure.savefig(
-            figures_folder
-            + "heatmap_folder_"
-            + str(folder)
-            + "_run_"
-            + str(run)
-            + ".png",
-            dpi=200,
-        )
-        plot.get_figure().clf()  # this clears the figure
+# ── KDE belief heatmap from robot detection positions ────────────────────────
+arena = np.linspace(-ARENA_HALF, ARENA_HALF, 200)
+grid_x, grid_y = np.meshgrid(arena, arena)
+grid_pts = np.vstack([grid_x.ravel(), grid_y.ravel()])
+
+if have_robot_pos and len(robot_xs) >= 2:
+    kde = gaussian_kde(np.vstack([robot_xs, robot_ys]), bw_method=0.4)
+    belief_density = kde(grid_pts).reshape(grid_x.shape)
+else:
+    # Fall back to actual target positions if robot positions unavailable
+    kde = gaussian_kde(np.vstack([target_xs, target_ys]), bw_method=0.4)
+    belief_density = kde(grid_pts).reshape(grid_x.shape)
+
+# ── Single aggregated figure ─────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(8, 7))
+
+# Belief heatmap
+hm = ax.imshow(belief_density, origin="lower", cmap="Blues",
+               extent=[-ARENA_HALF, ARENA_HALF, -ARENA_HALF, ARENA_HALF],
+               aspect="equal")
+plt.colorbar(hm, ax=ax, label="Belief density (robot detections)", shrink=0.7)
+
+# Actual target positions coloured by time
+norm = plt.Normalize(0, NUMBER_OF_STEPS)
+ax.scatter(target_xs, target_ys, c=cm.Reds(norm(steps)), s=30, zorder=3,
+           label="Actual target position")
+
+# Robot detection positions and error lines
+if have_robot_pos:
+    ax.scatter(robot_xs, robot_ys, c="blue", s=20, marker="x",
+               zorder=4, linewidths=1.2, label="Robot belief (sighting)")
+    for tx, ty, rx, ry in zip(target_xs, target_ys, robot_xs, robot_ys):
+        ax.plot([tx, rx], [ty, ry], color="purple",
+                linewidth=0.5, alpha=0.3, zorder=2)
+
+sm = plt.cm.ScalarMappable(cmap="Reds", norm=norm)
+sm.set_array([])
+plt.colorbar(sm, ax=ax, label="Detection step", shrink=0.7)
+
+ax.set_xlim(-ARENA_HALF, ARENA_HALF)
+ax.set_ylim(-ARENA_HALF, ARENA_HALF)
+ax.set_xlabel("X (m)")
+ax.set_ylabel("Y (m)")
+ax.set_title(f"Target belief vs reality - {len(available)} runs aggregated\n"
+             f"({len(all_detections)} total detection events)")
+ax.legend(loc="upper right", fontsize=8)
+plt.tight_layout()
+
+out = figures_folder + "tracker_map_aggregated.png"
+plt.savefig(out, dpi=200)
+plt.close()
+print(f"Saved {out}  ({len(all_detections)} detections across {len(available)} runs)")

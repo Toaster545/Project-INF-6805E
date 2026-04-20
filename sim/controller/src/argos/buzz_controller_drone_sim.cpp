@@ -146,7 +146,9 @@ bool CBuzzControllerDroneSim::IsTargetDetected() {
    if (detected) {
       target_found_ = true;
       UInt32 step = CSimulator::GetInstance().GetSpace().GetSimulationClock();
-      loop_functions.LogDetection(step, m_unRobotId);
+      float robot_x = m_pcPos->GetReading().Position.GetX();
+      float robot_y = m_pcPos->GetReading().Position.GetY();
+      loop_functions.LogDetection(step, m_unRobotId, robot_x, robot_y);
    }
 
    return detected;
