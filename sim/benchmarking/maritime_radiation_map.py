@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 ###
 # Creation of a heatmap of the belief map contructed by DORA
 ###
@@ -13,20 +14,25 @@ import seaborn as sns
 # result_folder_frontier = "../../results/frontier/"
 result_folder_random = "../../results/randomwalk_maritime/"
 result_folder_dora = "../../results/dora_maritime/"
+result_folder_og_dora = "../../results/dora/"
 radiation_sources_folder = "../data/"
 figures_folder = "figures/"
 number_of_steps_max = 300
 map_size = 16
-folders = [result_folder_random, result_folder_dora]  # omit result_folder_frontier,
+folders = [
+    # result_folder_random,
+    # result_folder_dora,
+    result_folder_og_dora,
+]  # omit result_folder_frontier,
 ###
 
-onlyfiles0 = [
-    f for f in listdir(result_folder_dora) if isfile(join(result_folder_dora, f))
+# assumes all three folders have same number of runs. Coul just min() for each but too lazy
+onlyfiles = [
+    f
+    for f in listdir(result_folder_og_dora)
+    if f.startswith("result") and f.endswith(".csv")
 ]
-onlyfiles1 = [
-    f for f in listdir(result_folder_dora) if isfile(join(result_folder_dora, f))
-]
-number_of_runs = int(min(len(onlyfiles0) / 2, len(onlyfiles1) / 2))
+number_of_runs = len(onlyfiles)
 number_of_folders = len(folders)
 
 for folder in range(0, number_of_folders):
