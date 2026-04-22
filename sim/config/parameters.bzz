@@ -1,0 +1,30 @@
+# Search space parameters
+SEARCH_SPACE = { .minx = -8.0, .miny = -8.0, .maxx = 8.0, .maxy = 8.0}
+
+# Searching drones parameters
+NUMBER_OF_ROBOTS = 15
+NEW_POSE_DELAY = 10
+SEARCH_SPEED = 80.0
+DELTA_REACHED_POS = 1.0
+
+# Targets parameters
+TARGET_SPEED_MAX = 20.0
+TARGET_SPEED_STDEV = 0.5
+
+# Experiment parameters
+EXPERIMENT_LENGHT = 300
+
+# Maritime SAR: robots' prior estimate of the target drift (ocean current + wind leeway).
+# Set DRIFT_X / DRIFT_Y to match <maritime drift_x="..." drift_y="..."> in the .argos config.
+# Set both to 0.0 for the static-target baseline.
+DRIFT_X    = 0.02  # m/step eastward  — must match drift_x in maritime.argos
+DRIFT_Y    = 0.0   # m/step northward
+DRIFT_GAIN = 0.5   # weight of the drift bias relative to the exploration gain
+
+# Sighting stigmergy: bias toward the predicted target position.
+# SIGHTING_GAIN > EXPLORATION_GAIN so confirmed sightings dominate over exploration.
+SIGHTING_GAIN    = 1.5
+SIGHTING_DECAY   = 150  # steps until a sighting is fully stale
+SIGHTING_MIN_GAP = 20   # minimum steps between two sightings for velocity estimation
+EXPLORER_BOOST   = 1.5  # exploration gain multiplier for non-detecting robots when a sighting exists
+

@@ -1,0 +1,26 @@
+services:
+  argos:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: argos_project
+    environment:
+      - DISPLAY=host.docker.internal:0.0
+      - QT_X11_NO_MITSHM=1
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - GALLIUM_DRIVER=llvmpipe
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace/sim/scenarios
+    stdin_open: true
+    tty: true
+
+# To use the GUI (ARGoS visualizer):
+#   1. Install VcXsrv: https://sourceforge.net/projects/vcxsrv/
+#   2. Launch XLaunch → Multiple windows → Display 0 → Check "Disable access control"
+#   3. Then run: docker compose -f docker-compose.windows.yml up
+#
+# To enter the container:
+#   docker exec -it argos_project bash
+#
+# To run headless (no GUI), pass -vizualization none in your .argos config

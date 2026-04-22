@@ -1,0 +1,133 @@
+--- /tmp/original.cpp	2026-04-22 02:14:46.458869545 +0000
++++ /home/docker/DBM-SMS/sim/controller/src/argos/buzz_controller_drone_sim.cpp	2026-04-22 01:58:10.694001713 +0000
+@@ -1,4 +1,6 @@
+ #include "buzz_controller_drone_sim.h"
++#include "../../../loop_functions/src/argos/maritime_loop_functions.h"
++
+ #include <iostream>
+ #include <stdlib.h>
+ #include <fstream>
+@@ -8,11 +10,13 @@
+ #include <cmath>
+ #include <json/json.h>
+ 
++#include <argos3/core/simulator/simulator.h>
++
+ namespace buzz_drone_sim {
+ 
+-const std::string RESULT_FILE = "results/result";
++const std::string RESULT_FILE           = "../results/result";
+ const std::string RADIATION_SOURCES_FILE = "data/radiation_sources";
+-const std::string DATA_TRANSMITTED_FILE = "results/data_transmitted";
++const std::string DATA_TRANSMITTED_FILE = "../results/data_transmitted";
+ 
+ /****************************************/
+ /****************************************/
+@@ -25,15 +29,18 @@
+       std::chrono::high_resolution_clock::now() -  previous);
+    random_engine_.seed(duration.count());
+ 
+-   // Find experiment number and file
+-   int experiment_number = -1;
+-   std::string file_name;
+-   do {
+-      experiment_number++;
+-      result_file_name_ = RESULT_FILE + std::to_string( experiment_number ) + ".csv";
+-   } while( std::ifstream(result_file_name_).good() );
++   // All robots in the same run share one experiment number, computed once.
++   static int experiment_number = -1;
++   if (experiment_number == -1) {
++      experiment_number = 0;
++      while (std::ifstream(RESULT_FILE + std::to_string(experiment_number) + ".csv").good()) {
++         ++experiment_number;
++      }
++   }
++   result_file_name_         = RESULT_FILE          + std::to_string(experiment_number) + ".csv";
+    data_transmitted_file_name_ = DATA_TRANSMITTED_FILE + std::to_string(experiment_number) + ".csv";
+-   radiation_file_name_ = RADIATION_SOURCES_FILE + std::to_string(experiment_number) + ".json";
++   radiation_file_name_      = RADIATION_SOURCES_FILE + std::to_string(experiment_number) + ".json";
++   target_found_ = false;
+ }
+ 
+ /****************************************/
+@@ -47,6 +54,8 @@
+ 
+ void CBuzzControllerDroneSim::Init(TConfigurationNode& t_node)  {
+    CBuzzControllerKheperaIV::Init(t_node);
++   result_file_.open(result_file_name_, std::ios::out | std::ios::app);
++   data_transmitted_file_.open(data_transmitted_file_name_, std::ios::out | std::ios::app);
+ }
+ 
+ /****************************************/
+@@ -112,6 +121,42 @@
+ /****************************************/
+ /****************************************/
+ 
++float CBuzzControllerDroneSim::GetTargetX() {
++   CMaritimeLoopFunctions& lf = dynamic_cast<CMaritimeLoopFunctions&>(
++      CSimulator::GetInstance().GetLoopFunctions());
++   return lf.GetTargetX();
++}
++
++float CBuzzControllerDroneSim::GetTargetY() {
++   CMaritimeLoopFunctions& lf = dynamic_cast<CMaritimeLoopFunctions&>(
++      CSimulator::GetInstance().GetLoopFunctions());
++   return lf.GetTargetY();
++}
++
++bool CBuzzControllerDroneSim::IsTargetDetected() {
++   CMaritimeLoopFunctions& loop_functions =
++      dynamic_cast<CMaritimeLoopFunctions&>(
++         CSimulator::GetInstance().GetLoopFunctions());
++
++   float drone_x = m_pcPos->GetReading().Position.GetX();
++   float drone_y = m_pcPos->GetReading().Position.GetY();
++
++   bool detected = loop_functions.GetTarget().IsDetected(drone_x, drone_y);
++
++   if (detected) {
++      target_found_ = true;
++      UInt32 step = CSimulator::GetInstance().GetSpace().GetSimulationClock();
++      float robot_x = m_pcPos->GetReading().Position.GetX();
++      float robot_y = m_pcPos->GetReading().Position.GetY();
++      loop_functions.LogDetection(step, m_unRobotId, robot_x, robot_y);
++   }
++
++   return detected;
++}
++
++/****************************************/
++/****************************************/
++
+ void CBuzzControllerDroneSim::LogDatum(const std::string& key, const float& data, const int& step){
+    std::string parsed_key = key;
+    std::replace(parsed_key.begin(), parsed_key.end(), '_', ' ');
+@@ -119,22 +164,17 @@
+    int x, y;
+    ss >> x >> y;
+ 
+-   std::ofstream result_file;
+-   result_file.open(result_file_name_, std::ios::out | std::ios::app);
+-
+    float weight = 1.0;
+-   result_file << x << "," << y << "," << data << "," << weight << "," << step << "," << m_unRobotId << std::endl;
++   result_file_ << x << "," << y << "," << data << "," << weight << "," << step << "," << m_unRobotId << "\n";
++   result_file_.flush();
+ }
+ 
+ /****************************************/
+ /****************************************/
+ 
+ void CBuzzControllerDroneSim::LogDataSize(const int& total_data, const int& step){
+-   
+-   std::ofstream result_file;
+-   result_file.open(data_transmitted_file_name_, std::ios::out | std::ios::app);
+-
+-   result_file << total_data << "," << step << "," << m_unRobotId << std::endl;
++   data_transmitted_file_ << total_data << "," << step << "," << m_unRobotId << "\n";
++   data_transmitted_file_.flush();
+ }
+ 
+-}
+\ No newline at end of file
++}

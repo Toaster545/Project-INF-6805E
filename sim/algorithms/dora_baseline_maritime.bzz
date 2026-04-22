@@ -1,0 +1,207 @@
+###
+# Maritime DORA baseline: standard DORA exploration in the maritime SAR scenario.
+#
+# Navigation: exploration gradient + drift bias only.
+# No sighting stigmergy, no tracker/explorer role split.
+# Used as a comparison point against the improved dora_maritime algorithm.
+#
+# Produces the same CSV files as dora_maritime.bzz:
+#   result{N}.csv          — coverage (exploration stigmergy, robot 0 only)
+#   data_transmitted{N}.csv — bandwidth per robot per step
+#   detections{N}.csv      — written by loop functions on every detection
+###
+
+include "buzz_includes/buzz_utils/vec2.bzz"
+include "buzz_includes/buzz_utils/string.bzz"
+include "config/DBM-SMS/parameters.bzz"
+include "buzz_includes/DBM-SMS/global_variables.bzz"
+include "buzz_includes/debug.bzz"
+include "buzz_includes/buzz_utils/obstacle_avoidance.bzz"
+
+EXPLORATION_GAIN = 1.0
+
+var stigmergy_exploration
+var target_found = 0
+
+###
+# Logging
+###
+
+function log_metrics() {
+  if (debug.msgqueue != nil) {
+    log_datasize(debug.msgqueue.total, current_step)
+  }
+
+  if (id == 0) {
+    stigmergy_exploration.foreach(function(key, data, robot) {
+      log_datum(key, data * 1.0, current_step)
+    })
+  }
+}
+
+###
+# Stigmergy
+###
+
+function init_stigmergy() {
+  stigmergy_exploration = stigmergy.create(1)
+  stigmergy_exploration.onconflict(function(k, l, r) {
+    if (l > r) { return l }
+    return r
+  })
+}
+
+function update_exploration() {
+  stigmergy_exploration.put(get_current_key(), current_step)
+}
+
+###
+# Spatial helpers
+###
+
+function get_adjacent_key(i, j) {
+  split_key = string.split(get_current_key(), "_")
+  key_x = string.toint(split_key[0]) + i
+  key_y = string.toint(split_key[1]) + j
+  return string.concat(string.tostring(key_x), "_", string.tostring(key_y))
+}
+
+function get_adjacent_position(i, j) {
+  split_key = string.split(get_current_key(), "_")
+  x = string.toint(split_key[0]) + i
+  y = string.toint(split_key[1]) + j
+  return math.vec2.new(x, y)
+}
+
+function position_in_bounds(position) {
+  return position.x <= SEARCH_SPACE.maxx and
+         position.x >= SEARCH_SPACE.minx and
+         position.y <= SEARCH_SPACE.maxy and
+         position.y >= SEARCH_SPACE.miny
+}
+
+function safe_normalize(vector) {
+  if (vector.x == 0 and vector.y == 0) {
+    return vector
+  }
+  return math.vec2.norm(vector)
+}
+
+###
+# Exploration gradient
+###
+
+function exploration_gradient_fn(adjacent_key, i, j) {
+  if (position_in_bounds(get_adjacent_position(i, j))) {
+    t = stigmergy_exploration.get(adjacent_key)
+    if (t != nil) {
+      return current_step - t
+    }
+    return current_step
+  }
+  return 0.0
+}
+
+function gradient(gradient_function) {
+  var i = -1
+  var gradient_vec = math.vec2.new(0.0, 0.0)
+
+  while (i <= 1) {
+    var j = -1
+    while (j <= 1) {
+      if (not(i == 0 and j == 0)) {
+        g = gradient_function(get_adjacent_key(i, j), i, j)
+        contribution = math.vec2.scale(math.vec2.norm(math.vec2.new(i, j)), g)
+        gradient_vec = math.vec2.add(gradient_vec, contribution)
+      }
+      j = j + 1
+    }
+    i = i + 1
+  }
+
+  if (math.abs(math.vec2.length(gradient_vec)) < 0.1) {
+    return math.vec2.new(0.0, 0.0)
+  }
+  return safe_normalize(gradient_vec)
+}
+
+###
+# Movement: exploration gradient + drift bias + obstacle avoidance
+###
+
+function move() {
+  exploration = math.vec2.scale(gradient(exploration_gradient_fn), EXPLORATION_GAIN)
+
+  drift_raw = math.vec2.new(DRIFT_X, DRIFT_Y)
+  if (math.vec2.length(drift_raw) > 0.0) {
+    drift = math.vec2.scale(safe_normalize(drift_raw), DRIFT_GAIN)
+  } else {
+    drift = math.vec2.new(0.0, 0.0)
+  }
+
+  if (close_to_obstacle()) {
+    obstacle_avoidance = avoid_obstacle()
+  } else {
+    obstacle_avoidance = math.vec2.new(0.0, 0.0)
+  }
+
+  if (exploration.x != 0.0 or exploration.y != 0.0) {
+    exploration_local = math.vec2.rotate(exploration, -pose.orientation.yaw)
+  } else {
+    exploration_local = math.vec2.new(1.0, 0.0)
+  }
+
+  if (drift.x != 0.0 or drift.y != 0.0) {
+    drift_local = math.vec2.rotate(drift, -pose.orientation.yaw)
+  } else {
+    drift_local = math.vec2.new(0.0, 0.0)
+  }
+
+  combined = safe_normalize(math.vec2.add(math.vec2.add(exploration_local, drift_local), obstacle_avoidance))
+  gotoc(combined.x * SEARCH_SPEED, combined.y * SEARCH_SPEED)
+}
+
+###
+# ARGoS lifecycle
+###
+
+function init() {
+  show_colored_trajectory(NUMBER_OF_ROBOTS)
+  set_leds(0, 255, 0)
+  init_stigmergy()
+  target_found = 0
+  math.rng.setseed(id)
+}
+
+function step() {
+  if (current_step < EXPERIMENT_LENGHT) {
+
+    if (is_target_detected()) {
+      if (target_found == 0) {
+        target_found = 1
+        log("Robot ", id, ": Target detected at step ", current_step)
+        set_leds(0, 0, 255)
+      }
+    }
+
+    if (current_step % NEW_POSE_DELAY) {
+      update_exploration()
+      move()
+      update_previous_sensor_readings()
+    }
+
+    log_metrics()
+  }
+
+  if (current_step >= EXPERIMENT_LENGHT) {
+    set_wheels(0.0, 0.0)
+  }
+
+  current_step = current_step + 1
+}
+
+function reset() {
+}
+
+function destroy() {
+}

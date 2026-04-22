@@ -1,0 +1,62 @@
+diff --git a/sim/controller/src/argos/buzz_closures_drone_sim.cpp b/sim/controller/src/argos/buzz_closures_drone_sim.cpp
+index 1d7af96..fd97b2b 100644
+--- a/sim/controller/src/argos/buzz_closures_drone_sim.cpp
++++ b/sim/controller/src/argos/buzz_closures_drone_sim.cpp
+@@ -173,6 +173,38 @@ static int BuzzGetCurrentKey(buzzvm_t vm){
+ /****************************************/
+ /****************************************/
+ 
++static int BuzzGetTargetX(buzzvm_t vm){
++   buzzvm_pushs(vm, buzzvm_string_register(vm, "controller", 1));
++   buzzvm_gload(vm);
++   float x = reinterpret_cast<CBuzzControllerDroneSim*>(buzzvm_stack_at(vm, 1)->u.value)->GetTargetX();
++   buzzvm_pushf(vm, x);
++   return buzzvm_ret1(vm);
++}
++
++static int BuzzGetTargetY(buzzvm_t vm){
++   buzzvm_pushs(vm, buzzvm_string_register(vm, "controller", 1));
++   buzzvm_gload(vm);
++   float y = reinterpret_cast<CBuzzControllerDroneSim*>(buzzvm_stack_at(vm, 1)->u.value)->GetTargetY();
++   buzzvm_pushf(vm, y);
++   return buzzvm_ret1(vm);
++}
++
++static int BuzzIsTargetDetected(buzzvm_t vm){
++   /* Get pointer to the controller */
++   buzzvm_pushs(vm, buzzvm_string_register(vm, "controller", 1));
++   buzzvm_gload(vm);
++   /* Call function – returns 1 if within detection radius, 0 otherwise */
++   bool detected =
++      reinterpret_cast<CBuzzControllerDroneSim*>(buzzvm_stack_at(vm, 1)->u.value)->IsTargetDetected();
++
++   buzzvm_pushi(vm, detected ? 1 : 0);
++
++   return buzzvm_ret1(vm);
++}
++
++/****************************************/
++/****************************************/
++
+ static int BuzzGetRadiationIntensity(buzzvm_t vm){
+    /* Get pointer to the controller */
+    buzzvm_pushs(vm, buzzvm_string_register(vm, "controller", 1));
+@@ -312,6 +344,18 @@ buzzvm_state CBuzzControllerDroneSim::RegisterFunctions() {
+    buzzvm_pushcc(m_tBuzzVM, buzzvm_function_register(m_tBuzzVM, BuzzGetRadiationIntensity));
+    buzzvm_gstore(m_tBuzzVM);
+ 
++   buzzvm_pushs(m_tBuzzVM, buzzvm_string_register(m_tBuzzVM, "get_target_x", 1));
++   buzzvm_pushcc(m_tBuzzVM, buzzvm_function_register(m_tBuzzVM, BuzzGetTargetX));
++   buzzvm_gstore(m_tBuzzVM);
++
++   buzzvm_pushs(m_tBuzzVM, buzzvm_string_register(m_tBuzzVM, "get_target_y", 1));
++   buzzvm_pushcc(m_tBuzzVM, buzzvm_function_register(m_tBuzzVM, BuzzGetTargetY));
++   buzzvm_gstore(m_tBuzzVM);
++
++   buzzvm_pushs(m_tBuzzVM, buzzvm_string_register(m_tBuzzVM, "is_target_detected", 1));
++   buzzvm_pushcc(m_tBuzzVM, buzzvm_function_register(m_tBuzzVM, BuzzIsTargetDetected));
++   buzzvm_gstore(m_tBuzzVM);
++
+    buzzvm_pushs(m_tBuzzVM, buzzvm_string_register(m_tBuzzVM, "log_datum", 1));
+    buzzvm_pushcc(m_tBuzzVM, buzzvm_function_register(m_tBuzzVM, BuzzLogDatum));
+    buzzvm_gstore(m_tBuzzVM);
