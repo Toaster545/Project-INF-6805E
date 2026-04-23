@@ -21,7 +21,7 @@ import numpy as np
 from scipy.stats import gaussian_kde
 
 ### Parameters
-scenario = "dora"  # "dora", "dora_baseline", or "randomwalk"
+scenario = "dora"  # "dora", "dora_comms", "dora_baseline", or "randomwalk"
 result_folder = f"../results/{scenario}_maritime/"
 figures_folder = "figures/"
 ARENA_HALF = 8  # exploration stigmergy runs from -8 to +8

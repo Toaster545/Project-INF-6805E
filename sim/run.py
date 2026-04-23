@@ -18,7 +18,7 @@ import subprocess
 import time
 
 # ── Configuration ──────────────────────────────────────────────
-SCENARIO = "dora"  # "dora", "dora_baseline", or "randomwalk"
+SCENARIO = "dora"  # "dora", "dora_comms", "dora_baseline", or "randomwalk"
 NB_RUNS = 50
 PARALLEL = True
 STAGGER_DELAY = 2  # seconds between process launches (avoid seed collision)
@@ -29,6 +29,7 @@ SCENARIOS_DIR = os.path.join(SCRIPT_DIR, "scenarios")
 
 ARGOS_FILES = {
     "dora": "maritime.argos",
+    "dora_comms": "dora_comms_maritime.argos",
     "dora_baseline": "dora_baseline_maritime.argos",
     "randomwalk": "randomwalk_maritime.argos",
 }

@@ -1,42 +1,26 @@
 ###
-# Maritime DORA with Sparse Communication Relay
+# Maritime DORA: Drift-aware exploration for moving maritime SAR targets.
 #
-# Extends drift-aware exploration with a 7-state machine inspired by
-# Dah-Achinanon et al. (2023) "Search and rescue with sparsely connected swarms".
-#
-# Navigation policy (SEARCHER / RENDEZVOUS):
+# Navigation policy:
 #   direction = EXPLORATION_GAIN * exploration_gradient
 #             + DRIFT_GAIN       * drift_direction
-#             + SIGHTING_GAIN    * sighting_direction    (when sighting known)
+#             + SIGHTING_GAIN    * sighting_direction
 #
-# State machine:
-#   SEARCHER       — belief-space exploration + sighting pursuit
-#   ROOT_CANDIDATE — navigate to rendezvous after first detection
-#   ROOT           — stay at rendezvous, manage relay chain, relaunch auctions
-#   AUCTIONEER     — broadcast one relay slot, collect bids, elect winner
-#   NETWORKER_BID  — submit bid, await result with timeout
-#   NETWORKER      — hold (and refresh) assigned relay position
-#   RENDEZVOUS     — periodic check-in; bid if auction open, else resume search
+# sighting_direction operates in two layers:
 #
-# Relay stigmergy keys (id 3, onconflict keeps larger):
-#   root_id          — elected root robot ID
-#   tgt_x / tgt_y   — latest target position (refreshed from sighting each step)
-#   n_count          — total relay hops needed root→target
-#   nx_K / ny_K      — world position of K-th hop (1-indexed)
-#   na_K             — assigned robot ID for slot K  (-1.0 = unassigned)
-#   auc_seq          — monotone auction counter
-#   auc_x / auc_y   — relay position being auctioned
-#   auc_slot         — slot index being auctioned
-#   auc_open         — 1.0 while accepting bids, 0.0 when closed
-#   b_<seq>_<id>     — bid from robot <id> in auction <seq>  (1/dist, larger = closer)
-#   auc_winner       — winner robot ID of last closed auction
-#   auc_winseq       — auction sequence of last winner announcement
+#   Layer 1 — last-known position (one sighting available):
+#     Navigate toward the cell where the target was last detected.
+#     Weight decays linearly to 0 over SIGHTING_DECAY steps.
 #
-# NOTE: relay positions use onconflict "keep larger", which works correctly
-# for monotone values (steps, IDs) but may lag for continuous positions if
-# the target drifts to smaller coordinates. Networkers re-read their slot
-# from stigmergy every step, so they will follow once the larger value is
-# overwritten by a genuinely larger coordinate update.
+#   Layer 2 — predicted future position (two sightings available):
+#     Estimate target velocity from the two most recent sightings and
+#     extrapolate ahead by the time elapsed since the last contact.
+#     This replaces the fixed DRIFT prior with an adaptive estimate
+#     learned from actual observations.
+#
+# Both layers degrade gracefully: Layer 2 falls back to Layer 1 when
+# only one sighting exists; Layer 1 falls back to pure drift-DORA when
+# no sighting has been recorded yet.
 ###
 
 include "buzz_includes/buzz_utils/vec2.bzz"
@@ -46,49 +30,16 @@ include "buzz_includes/DBM-SMS/global_variables.bzz"
 include "buzz_includes/debug.bzz"
 include "buzz_includes/buzz_utils/obstacle_avoidance.bzz"
 
-# ── State IDs ─────────────────────────────────────────────────────────────────
-STATE_SEARCHER       = 0
-STATE_ROOT_CANDIDATE = 1
-STATE_ROOT           = 2
-STATE_AUCTIONEER     = 3
-STATE_NETWORKER_BID  = 4
-STATE_NETWORKER      = 5
-STATE_RENDEZVOUS     = 6
+EXPLORATION_GAIN = 1.0
 
-# ── Relay / rendezvous parameters ─────────────────────────────────────────────
-# Override these in parameters.bzz if desired.
-EXPLORATION_GAIN  = 1.0
-RENDEZVOUS_X      = 0.0    # centre of the arena
-RENDEZVOUS_Y      = 0.0
-RENDEZVOUS_PERIOD = 100    # steps between periodic check-ins
-GOAL_THRESH       = 0.5    # m — "arrived" radius for waypoints
-AUCTION_DURATION  = 30     # steps each auction window stays open
-COMM_RANGE        = 3.0    # m — maximum spacing between relay hops
-
-# ── Stigmergy tables ──────────────────────────────────────────────────────────
 var stigmergy_exploration
 var stigmergy_sighting
-var stigmergy_relay          # id 3 — all relay coordination (keep larger)
-
-# ── Per-robot mutable state ───────────────────────────────────────────────────
-var robot_state         = STATE_SEARCHER
-var target_found        = 0
+var target_found = 0
 var currently_detecting = 0
-var rendezvous_timer    = 0
 
-var my_auction_seq      = -1    # sequence of auction I last bid in
-var bid_wait_timer      = 0     # countdown before giving up on auction result
-
-var networker_pos_x     = 0.0
-var networker_pos_y     = 0.0
-var my_networker_index  = -1
-
-var root_auction_seq    = 0     # root's monotone auction counter
-var auction_timer       = 0     # steps remaining in current auction window
-
-###############################################################################
+###
 # Logging
-###############################################################################
+###
 
 function log_metrics() {
   if (debug.msgqueue != nil) {
@@ -98,6 +49,7 @@ function log_metrics() {
       log("Robot ", id, ": debug.msgqueue is nil — data_transmitted will be empty")
     }
   }
+
   if (id == 0) {
     stigmergy_exploration.foreach(function(key, data, robot) {
       log_datum(key, data * 1.0, current_step)
@@ -105,9 +57,9 @@ function log_metrics() {
   }
 }
 
-###############################################################################
-# Stigmergy initialisation
-###############################################################################
+###
+# Stigmergy
+###
 
 function init_stigmergies() {
   stigmergy_exploration = stigmergy.create(1)
@@ -116,26 +68,51 @@ function init_stigmergies() {
     return r
   })
 
-  # Sighting: t1,x1,y1 = most recent contact; t0,x0,y0 = previous contact.
-  # onconflict keeps larger — timestamps only grow, so newest wins.
+  # Sighting stigmergy stores up to two contact reports as float keys:
+  #   "t1","x1","y1"  — most recent sighting (step + world position)
+  #   "t0","x0","y0"  — previous sighting, used for velocity estimation
+  # onconflict keeps the larger value; since timestamps only increase,
+  # this ensures the most recent sighting always wins.
   stigmergy_sighting = stigmergy.create(2)
   stigmergy_sighting.onconflict(function(k, l, r) {
     if (l > r) { return l }
     return r
   })
-
-  # Relay: keep larger value for all keys.
-  # Bids are encoded as 1/(dist+ε) so larger bid = closer robot = better bid.
-  stigmergy_relay = stigmergy.create(3)
-  stigmergy_relay.onconflict(function(k, l, r) {
-    if (l > r) { return l }
-    return r
-  })
 }
 
-###############################################################################
+function update_exploration() {
+  stigmergy_exploration.put(get_current_key(), current_step)
+}
+
+function update_sighting() {
+  t1 = stigmergy_sighting.get("t1")
+
+  # Only shift the current sighting to "previous" when enough time has
+  # passed that the target has moved a measurable distance between the
+  # two contact reports (SIGHTING_MIN_GAP steps).
+  # NOTE: nested ifs are required because Buzz does not short-circuit `and`,
+  # so `current_step - t1` would be evaluated even when t1 == nil.
+  if (t1 != nil) {
+    if (current_step - t1 > SIGHTING_MIN_GAP) {
+      x1 = stigmergy_sighting.get("x1")
+      y1 = stigmergy_sighting.get("y1")
+      if (x1 != nil and y1 != nil) {
+        stigmergy_sighting.put("t0", t1)
+        stigmergy_sighting.put("x0", x1)
+        stigmergy_sighting.put("y0", y1)
+      }
+    }
+  }
+
+  # Record the new contact.
+  stigmergy_sighting.put("t1", current_step * 1.0)
+  stigmergy_sighting.put("x1", pose.position.x)
+  stigmergy_sighting.put("y1", pose.position.y)
+}
+
+###
 # Spatial helpers
-###############################################################################
+###
 
 function get_adjacent_key(i, j) {
   split_key = string.split(get_current_key(), "_")
@@ -165,58 +142,9 @@ function safe_normalize(vector) {
   return math.vec2.norm(vector)
 }
 
-# Euclidean distance from this robot to an arbitrary world point.
-function dist_to_point(x, y) {
-  dx = x - pose.position.x
-  dy = y - pose.position.y
-  return math.sqrt(dx * dx + dy * dy)
-}
-
-# Navigate toward (gx, gy) using the existing apply_goal pipeline.
-function navigate_to(gx, gy) {
-  dir = math.vec2.new(gx - pose.position.x, gy - pose.position.y)
-  if (math.vec2.length(dir) > 0.1) {
-    apply_goal(safe_normalize(dir))
-  } else {
-    apply_goal(math.vec2.new(0.0, 0.0))
-  }
-}
-
-# Construct a bid key unique to one auction sequence and one robot.
-function make_bid_key(seq, robot) {
-  return string.concat("b_", string.tostring(seq), "_", string.tostring(robot))
-}
-
-###############################################################################
-# Exploration stigmergy updates
-###############################################################################
-
-function update_exploration() {
-  stigmergy_exploration.put(get_current_key(), current_step)
-}
-
-function update_sighting() {
-  t1 = stigmergy_sighting.get("t1")
-  # NOTE: Buzz does not short-circuit 'and', so nested ifs are required.
-  if (t1 != nil) {
-    if (current_step - t1 > SIGHTING_MIN_GAP) {
-      x1 = stigmergy_sighting.get("x1")
-      y1 = stigmergy_sighting.get("y1")
-      if (x1 != nil and y1 != nil) {
-        stigmergy_sighting.put("t0", t1)
-        stigmergy_sighting.put("x0", x1)
-        stigmergy_sighting.put("y0", y1)
-      }
-    }
-  }
-  stigmergy_sighting.put("t1", current_step * 1.0)
-  stigmergy_sighting.put("x1", pose.position.x)
-  stigmergy_sighting.put("y1", pose.position.y)
-}
-
-###############################################################################
-# Exploration gradient (unchanged from original DORA)
-###############################################################################
+###
+# Exploration gradient
+###
 
 function exploration_gradient_fn(adjacent_key, i, j) {
   if (position_in_bounds(get_adjacent_position(i, j))) {
@@ -229,9 +157,14 @@ function exploration_gradient_fn(adjacent_key, i, j) {
   return 0.0
 }
 
+###
+# Generic 8-neighbour gradient computation
+###
+
 function gradient(gradient_function) {
   var i = -1
   var gradient_vec = math.vec2.new(0.0, 0.0)
+
   while (i <= 1) {
     var j = -1
     while (j <= 1) {
@@ -244,37 +177,55 @@ function gradient(gradient_function) {
     }
     i = i + 1
   }
+
   if (math.abs(math.vec2.length(gradient_vec)) < 0.1) {
     return math.vec2.new(0.0, 0.0)
   }
   return safe_normalize(gradient_vec)
 }
 
-###############################################################################
-# Sighting direction — Layer 1 (last known) + Layer 2 (velocity prediction)
-###############################################################################
+###
+# Sighting direction
+#
+# Returns a world-frame unit vector toward the target's predicted position.
+#
+# Layer 2 (two sightings): estimate velocity from (x0,y0,t0) and (x1,y1,t1),
+#   cap it at a sensible maximum, and extrapolate by the elapsed time.
+# Layer 1 (one sighting): navigate directly to (x1,y1).
+# No sighting: return zero vector (caller treats as no contribution).
+###
 
 function compute_sighting_direction() {
   t1 = stigmergy_sighting.get("t1")
   x1 = stigmergy_sighting.get("x1")
   y1 = stigmergy_sighting.get("y1")
+
   if (t1 == nil or x1 == nil or y1 == nil) {
     return math.vec2.new(0.0, 0.0)
   }
+
   age = current_step - t1
   if (age >= SIGHTING_DECAY) {
     return math.vec2.new(0.0, 0.0)
   }
+
   pred_x = x1
   pred_y = y1
+
+  # Layer 2: refine prediction with estimated velocity if a previous
+  # sighting exists and is older than SIGHTING_MIN_GAP.
   t0 = stigmergy_sighting.get("t0")
   x0 = stigmergy_sighting.get("x0")
   y0 = stigmergy_sighting.get("y0")
+
   if (t0 != nil and x0 != nil and y0 != nil) {
     if (t1 - t0 > 0) {
       dt = t1 - t0
       vx = (x1 - x0) / dt
       vy = (y1 - y0) / dt
+
+      # Cap estimated velocity to avoid extrapolating on noisy outliers.
+      # 0.1 m/step is 5x the typical ocean drift and covers fast targets.
       v_vec = math.vec2.new(vx, vy)
       v_len = math.vec2.length(v_vec)
       if (v_len > 0.1) {
@@ -282,14 +233,18 @@ function compute_sighting_direction() {
         vx = v_vec.x
         vy = v_vec.y
       }
+
       pred_x = x1 + vx * age
       pred_y = y1 + vy * age
+
+      # Clamp to arena so robots don't chase an out-of-bounds prediction.
       if (pred_x < SEARCH_SPACE.minx) { pred_x = SEARCH_SPACE.minx }
       if (pred_x > SEARCH_SPACE.maxx) { pred_x = SEARCH_SPACE.maxx }
       if (pred_y < SEARCH_SPACE.miny) { pred_y = SEARCH_SPACE.miny }
       if (pred_y > SEARCH_SPACE.maxy) { pred_y = SEARCH_SPACE.maxy }
     }
   }
+
   dir = math.vec2.new(pred_x - pose.position.x, pred_y - pose.position.y)
   if (math.vec2.length(dir) < 0.1) {
     return math.vec2.new(0.0, 0.0)
@@ -297,9 +252,9 @@ function compute_sighting_direction() {
   return safe_normalize(dir)
 }
 
-###############################################################################
+###
 # Movement
-###############################################################################
+###
 
 function apply_goal(goal_world) {
   if (close_to_obstacle()) {
@@ -316,11 +271,11 @@ function apply_goal(goal_world) {
   gotoc(combined.x * SEARCH_SPEED, combined.y * SEARCH_SPEED)
 }
 
-# Full search/track move — used by SEARCHER and RENDEZVOUS states.
-function search_move() {
-  # ── Tracker: has detected the target at least once ────────────────────────
+function move() {
+  # ── Tracker: detected the target at some point ──────────────────────────
   if (target_found == 1) {
     if (currently_detecting == 1) {
+      # In range: navigate directly toward the actual target position.
       tx = get_target_x()
       ty = get_target_y()
       dir = math.vec2.new(tx - pose.position.x, ty - pose.position.y)
@@ -330,6 +285,7 @@ function search_move() {
         apply_goal(math.vec2.new(0.0, 0.0))
       }
     } else {
+      # Out of range: reacquire via sighting extrapolation.
       sighting_dir = compute_sighting_direction()
       t1 = stigmergy_sighting.get("t1")
       if (math.vec2.length(sighting_dir) > 0.0 and t1 != nil) {
@@ -342,419 +298,58 @@ function search_move() {
     }
     return
   }
-  # ── Explorer: has not yet detected the target ─────────────────────────────
+
+  # ── Explorer: has not yet detected the target ────────────────────────────
   exploration = math.vec2.scale(gradient(exploration_gradient_fn), EXPLORATION_GAIN)
+
   drift_raw = math.vec2.new(DRIFT_X, DRIFT_Y)
   if (math.vec2.length(drift_raw) > 0.0) {
     drift = math.vec2.scale(safe_normalize(drift_raw), DRIFT_GAIN)
   } else {
     drift = math.vec2.new(0.0, 0.0)
   }
+
+  # Boost exploration when a sighting exists so explorers spread out faster.
   sighting_dir = compute_sighting_direction()
   t1 = stigmergy_sighting.get("t1")
   if (math.vec2.length(sighting_dir) > 0.0 and t1 != nil) {
     exploration = math.vec2.scale(exploration, EXPLORER_BOOST)
   }
+
   apply_goal(math.vec2.add(exploration, drift))
 }
 
-###############################################################################
-# Relay chain geometry helpers
-###############################################################################
-
-# Number of intermediate hops needed along root → target line.
-function relay_hops_needed(tx, ty) {
-  dx = tx - RENDEZVOUS_X
-  dy = ty - RENDEZVOUS_Y
-  dist = math.sqrt(dx * dx + dy * dy)
-  if (dist <= COMM_RANGE) {
-    return 0
-  }
-  return math.floor(dist / COMM_RANGE)
-}
-
-# World position of the k-th hop (1-indexed) along root → target.
-function relay_hop_position(k, tx, ty) {
-  dx = tx - RENDEZVOUS_X
-  dy = ty - RENDEZVOUS_Y
-  dist = math.sqrt(dx * dx + dy * dy)
-  if (dist < 0.001) {
-    return math.vec2.new(RENDEZVOUS_X, RENDEZVOUS_Y)
-  }
-  ux = dx / dist
-  uy = dy / dist
-  return math.vec2.new(RENDEZVOUS_X + ux * COMM_RANGE * k,
-                       RENDEZVOUS_Y + uy * COMM_RANGE * k)
-}
-
-# Publish slot positions and initialise unassigned markers into stigmergy_relay.
-function root_publish_relay() {
-  tgt_x = stigmergy_relay.get("tgt_x")
-  tgt_y = stigmergy_relay.get("tgt_y")
-  if (tgt_x == nil or tgt_y == nil) {
-    return
-  }
-  n = relay_hops_needed(tgt_x, tgt_y)
-  stigmergy_relay.put("n_count", n * 1.0)
-  var k = 1
-  while (k <= n) {
-    pos = relay_hop_position(k, tgt_x, tgt_y)
-    stigmergy_relay.put(string.concat("nx_", string.tostring(k)), pos.x)
-    stigmergy_relay.put(string.concat("ny_", string.tostring(k)), pos.y)
-    na_key = string.concat("na_", string.tostring(k))
-    if (stigmergy_relay.get(na_key) == nil) {
-      stigmergy_relay.put(na_key, -1.0)
-    }
-    k = k + 1
-  }
-}
-
-# Return the lowest-indexed unassigned slot, or -1 if all are filled.
-function root_find_unassigned_slot() {
-  n_val = stigmergy_relay.get("n_count")
-  if (n_val == nil) {
-    return -1
-  }
-  n = math.floor(n_val)
-  var k = 1
-  while (k <= n) {
-    na_val = stigmergy_relay.get(string.concat("na_", string.tostring(k)))
-    if (na_val != nil) {
-      if (na_val < 0) {
-        return k
-      }
-    }
-    k = k + 1
-  }
-  return -1
-}
-
-###############################################################################
-# STATE: SEARCHER
-###############################################################################
-
-function state_searcher() {
-  rendezvous_timer = rendezvous_timer + 1
-
-  # Opportunistic bidding: if a new auction is visible, bid immediately.
-  auc_open = stigmergy_relay.get("auc_open")
-  auc_seq  = stigmergy_relay.get("auc_seq")
-  if (auc_open != nil and auc_seq != nil) {
-    if (auc_open > 0) {
-      seq_int = math.floor(auc_seq)
-      if (seq_int != my_auction_seq) {
-        auc_x = stigmergy_relay.get("auc_x")
-        auc_y = stigmergy_relay.get("auc_y")
-        if (auc_x != nil and auc_y != nil) {
-          my_auction_seq = seq_int
-          bid_dist = dist_to_point(auc_x, auc_y)
-          # Larger value = closer robot = better bid.
-          bid_val = 1.0 / (bid_dist + 0.001)
-          stigmergy_relay.put(make_bid_key(seq_int, id), bid_val)
-          bid_wait_timer = AUCTION_DURATION * 2
-          robot_state = STATE_NETWORKER_BID
-          log("Robot ", id, ": bid placed (dist=", bid_dist, ")")
-          return
-        }
-      }
-    }
-  }
-
-  # Periodic rendezvous check-in.
-  if (rendezvous_timer >= RENDEZVOUS_PERIOD) {
-    rendezvous_timer = 0
-    robot_state = STATE_RENDEZVOUS
-    return
-  }
-
-  # Normal search / track.
-  if (current_step % NEW_POSE_DELAY) {
-    update_exploration()
-    search_move()
-    update_previous_sensor_readings()
-  }
-}
-
-###############################################################################
-# STATE: ROOT_CANDIDATE — travel to rendezvous to claim or yield root role
-###############################################################################
-
-function state_root_candidate() {
-  navigate_to(RENDEZVOUS_X, RENDEZVOUS_Y)
-
-  if (dist_to_point(RENDEZVOUS_X, RENDEZVOUS_Y) < GOAL_THRESH) {
-    existing_root = stigmergy_relay.get("root_id")
-
-    if (existing_root != nil) {
-      if (math.floor(existing_root) > id) {
-        # An existing root has a higher ID and will win onconflict.
-        # Share our target observation then return to search/track.
-        log("Robot ", id, ": root already claimed by ", existing_root, ", yielding")
-        robot_state = STATE_SEARCHER
-        return
-      }
-    }
-
-    # Claim root — onconflict keeps largest ID, so ties are deterministic.
-    stigmergy_relay.put("root_id", id * 1.0)
-
-    # Publish target position from our latest sighting.
-    tx = stigmergy_sighting.get("x1")
-    ty = stigmergy_sighting.get("y1")
-    if (tx != nil and ty != nil) {
-      stigmergy_relay.put("tgt_x", tx)
-      stigmergy_relay.put("tgt_y", ty)
-    }
-
-    robot_state = STATE_ROOT
-    set_leds(255, 165, 0)   # orange — root
-    log("Robot ", id, ": became ROOT at step ", current_step)
-  }
-}
-
-###############################################################################
-# STATE: ROOT — stay at rendezvous, keep relay chain up to date
-###############################################################################
-
-function state_root() {
-  # Verify we are still the elected root (a higher-ID robot may have arrived).
-  actual_root = stigmergy_relay.get("root_id")
-  if (actual_root != nil) {
-    if (math.floor(actual_root) != id) {
-      log("Robot ", id, ": displaced from ROOT by ", actual_root)
-      robot_state = STATE_SEARCHER
-      set_leds(0, 255, 0)
-      return
-    }
-  }
-
-  navigate_to(RENDEZVOUS_X, RENDEZVOUS_Y)
-
-  # Keep target position fresh from sighting stigmergy.
-  tx = stigmergy_sighting.get("x1")
-  ty = stigmergy_sighting.get("y1")
-  if (tx != nil and ty != nil) {
-    stigmergy_relay.put("tgt_x", tx)
-    stigmergy_relay.put("tgt_y", ty)
-  }
-
-  # Publish / refresh relay slot positions.
-  root_publish_relay()
-
-  # Launch an auction for the first unassigned slot.
-  slot = root_find_unassigned_slot()
-  if (slot > 0) {
-    ax = stigmergy_relay.get(string.concat("nx_", string.tostring(slot)))
-    ay = stigmergy_relay.get(string.concat("ny_", string.tostring(slot)))
-    if (ax != nil and ay != nil) {
-      root_auction_seq = root_auction_seq + 1
-      stigmergy_relay.put("auc_x",    ax)
-      stigmergy_relay.put("auc_y",    ay)
-      stigmergy_relay.put("auc_slot", slot * 1.0)
-      stigmergy_relay.put("auc_seq",  root_auction_seq * 1.0)
-      stigmergy_relay.put("auc_open", 1.0)
-      auction_timer = AUCTION_DURATION
-      robot_state = STATE_AUCTIONEER
-      log("Robot ", id, " (ROOT): auction seq=", root_auction_seq,
-          " slot=", slot, " at (", ax, ",", ay, ")")
-    }
-  }
-}
-
-###############################################################################
-# STATE: AUCTIONEER — wait for bids, elect winner, announce result
-###############################################################################
-
-function state_auctioneer() {
-  navigate_to(RENDEZVOUS_X, RENDEZVOUS_Y)
-  auction_timer = auction_timer - 1
-
-  if (auction_timer > 0) {
-    return   # still collecting bids
-  }
-
-  # Auction closed — find highest bid (= closest robot, 1/dist encoding).
-  cur_seq = math.floor(stigmergy_relay.get("auc_seq"))
-  var best_val   = 0.0
-  var best_robot = -1
-  var k = 0
-  while (k < NUMBER_OF_ROBOTS) {
-    bv = stigmergy_relay.get(make_bid_key(cur_seq, k))
-    if (bv != nil) {
-      if (bv > best_val) {
-        best_val   = bv
-        best_robot = k
-      }
-    }
-    k = k + 1
-  }
-
-  stigmergy_relay.put("auc_open", 0.0)
-
-  if (best_robot >= 0) {
-    slot = math.floor(stigmergy_relay.get("auc_slot"))
-    stigmergy_relay.put(string.concat("na_", string.tostring(slot)), best_robot * 1.0)
-    stigmergy_relay.put("auc_winner",  best_robot * 1.0)
-    stigmergy_relay.put("auc_winseq",  cur_seq * 1.0)
-    log("Robot ", id, " (AUCTIONEER): winner=", best_robot,
-        " bid=", best_val, " slot=", slot)
-  } else {
-    # No bids received — reset slot so it will be re-auctioned next cycle.
-    slot = math.floor(stigmergy_relay.get("auc_slot"))
-    stigmergy_relay.put(string.concat("na_", string.tostring(slot)), -1.0)
-    log("Robot ", id, " (AUCTIONEER): no bids for slot ", slot, ", will retry")
-  }
-
-  robot_state = STATE_ROOT
-}
-
-###############################################################################
-# STATE: NETWORKER_BID — await auction result, win → NETWORKER, lose → SEARCHER
-###############################################################################
-
-function state_networker_bid() {
-  set_wheels(0.0, 0.0)   # hold position while waiting
-  bid_wait_timer = bid_wait_timer - 1
-
-  winner = stigmergy_relay.get("auc_winner")
-  winseq = stigmergy_relay.get("auc_winseq")
-
-  if (winner != nil and winseq != nil) {
-    if (math.floor(winseq) == my_auction_seq) {
-      if (math.floor(winner) == id) {
-        # Won: navigate to assigned relay position.
-        slot = math.floor(stigmergy_relay.get("auc_slot"))
-        my_networker_index = slot
-        nx = stigmergy_relay.get(string.concat("nx_", string.tostring(slot)))
-        ny = stigmergy_relay.get(string.concat("ny_", string.tostring(slot)))
-        if (nx != nil and ny != nil) {
-          networker_pos_x = nx
-          networker_pos_y = ny
-          robot_state = STATE_NETWORKER
-          set_leds(255, 0, 255)   # magenta — networker
-          log("Robot ", id, ": WON slot ", slot, " → (", nx, ",", ny, ")")
-        }
-      } else {
-        # Lost auction.
-        robot_state = STATE_SEARCHER
-        log("Robot ", id, ": lost auction to robot ", winner)
-      }
-      return
-    }
-  }
-
-  # Timeout — give up waiting and resume search.
-  if (bid_wait_timer <= 0) {
-    robot_state = STATE_SEARCHER
-    log("Robot ", id, ": auction wait timeout, resuming search")
-  }
-}
-
-###############################################################################
-# STATE: NETWORKER — hold relay position, refresh from stigmergy each step
-###############################################################################
-
-function state_networker() {
-  # Re-read position each step so the root can nudge it as the target moves.
-  nx = stigmergy_relay.get(string.concat("nx_", string.tostring(my_networker_index)))
-  ny = stigmergy_relay.get(string.concat("ny_", string.tostring(my_networker_index)))
-  if (nx != nil and ny != nil) {
-    networker_pos_x = nx
-    networker_pos_y = ny
-  }
-  navigate_to(networker_pos_x, networker_pos_y)
-}
-
-###############################################################################
-# STATE: RENDEZVOUS — periodic check-in, bid if auction open, then resume
-###############################################################################
-
-function state_rendezvous() {
-  # Continue updating exploration map on the way.
-  if (current_step % NEW_POSE_DELAY) {
-    update_exploration()
-    update_previous_sensor_readings()
-  }
-
-  navigate_to(RENDEZVOUS_X, RENDEZVOUS_Y)
-
-  if (dist_to_point(RENDEZVOUS_X, RENDEZVOUS_Y) < GOAL_THRESH) {
-    auc_open = stigmergy_relay.get("auc_open")
-    auc_seq  = stigmergy_relay.get("auc_seq")
-    if (auc_open != nil and auc_seq != nil) {
-      if (auc_open > 0) {
-        seq_int = math.floor(auc_seq)
-        if (seq_int != my_auction_seq) {
-          auc_x = stigmergy_relay.get("auc_x")
-          auc_y = stigmergy_relay.get("auc_y")
-          if (auc_x != nil and auc_y != nil) {
-            my_auction_seq = seq_int
-            bid_dist = dist_to_point(auc_x, auc_y)
-            bid_val  = 1.0 / (bid_dist + 0.001)
-            stigmergy_relay.put(make_bid_key(seq_int, id), bid_val)
-            bid_wait_timer = AUCTION_DURATION * 2
-            robot_state = STATE_NETWORKER_BID
-            log("Robot ", id, " (RENDEZVOUS): bid placed (dist=", bid_dist, ")")
-            return
-          }
-        }
-      }
-    }
-    # No open auction — resume searching.
-    rendezvous_timer = 0
-    robot_state = STATE_SEARCHER
-    log("Robot ", id, ": rendezvous done, resuming search")
-  }
-}
-
-###############################################################################
+###
 # ARGoS lifecycle
-###############################################################################
+###
 
 function init() {
   show_colored_trajectory(NUMBER_OF_ROBOTS)
   set_leds(0, 255, 0)
   init_stigmergies()
-  robot_state        = STATE_SEARCHER
-  target_found       = 0
-  rendezvous_timer   = 0
-  my_auction_seq     = -1
-  bid_wait_timer     = 0
-  networker_pos_x    = 0.0
-  networker_pos_y    = 0.0
-  my_networker_index = -1
-  root_auction_seq   = 0
-  auction_timer      = 0
+  target_found = 0
   math.rng.setseed(id)
 }
 
 function step() {
   if (current_step < EXPERIMENT_LENGHT) {
 
-    # ── Sensing ───────────────────────────────────────────────────────────────
     currently_detecting = 0
     if (is_target_detected()) {
       currently_detecting = 1
       update_sighting()
       if (target_found == 0) {
         target_found = 1
+        log("Robot ", id, ": Target detected at step ", current_step)
         set_leds(0, 0, 255)
-        log("Robot ", id, ": target first detected at step ", current_step)
-        # Head to rendezvous to claim the root role and trigger relay formation.
-        if (robot_state == STATE_SEARCHER) {
-          robot_state = STATE_ROOT_CANDIDATE
-        }
       }
     }
 
-    # ── State machine dispatch ────────────────────────────────────────────────
-    if (robot_state == STATE_SEARCHER)       { state_searcher()       }
-    if (robot_state == STATE_ROOT_CANDIDATE) { state_root_candidate() }
-    if (robot_state == STATE_ROOT)           { state_root()           }
-    if (robot_state == STATE_AUCTIONEER)     { state_auctioneer()     }
-    if (robot_state == STATE_NETWORKER_BID)  { state_networker_bid()  }
-    if (robot_state == STATE_NETWORKER)      { state_networker()      }
-    if (robot_state == STATE_RENDEZVOUS)     { state_rendezvous()     }
+    if (current_step % NEW_POSE_DELAY) {
+      update_exploration()
+      move()
+      update_previous_sensor_readings()
+    }
 
     log_metrics()
   }

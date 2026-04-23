@@ -28,6 +28,7 @@ import numpy as np
 result_folder_randomwalk = "../results/randomwalk_maritime/"
 result_folder_dora_baseline = "../results/dora_baseline_maritime/"
 result_folder_dora = "../results/dora_maritime/"
+result_folder_dora_comms = "../results/dora_comms_maritime/"
 figures_folder = "figures/"
 
 # print(f"Current Working Directory: {os.getcwd()}")
@@ -36,9 +37,19 @@ os.makedirs(figures_folder, exist_ok=True)
 NUMBER_OF_STEPS = 300  # must match experiment length in .argos
 ###
 
-FOLDERS = [result_folder_randomwalk, result_folder_dora_baseline, result_folder_dora]
-LABELS = ["Random Walk", "DORA Baseline", "DORA Maritime (improved)"]
-COLORS = ["lightcoral", "gold", "cornflowerblue"]
+FOLDERS = [
+    result_folder_randomwalk,
+    result_folder_dora_baseline,
+    result_folder_dora,
+    result_folder_dora_comms,
+]
+LABELS = [
+    "Random Walk",
+    "DORA Baseline",
+    "DORA Maritime",
+    "DORA Comms",
+]
+COLORS = ["lightcoral", "gold", "cornflowerblue", "lightgreen"]
 
 
 def count_runs(folder):

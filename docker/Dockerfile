@@ -251,6 +251,7 @@ COPY sim/run.py /home/docker/DBM-SMS/sim/
 # Compile maritime Buzz scripts
 RUN cd /home/docker/DBM-SMS/sim && \
     bzzc dora_maritime.bzz && \
+    bzzc dora_comms_maritime.bzz && \
     bzzc dora_baseline_maritime.bzz && \
     bzzc randomwalk_maritime.bzz
 

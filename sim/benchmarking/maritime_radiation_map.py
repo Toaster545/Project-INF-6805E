@@ -27,6 +27,7 @@ RESULT_FOLDERS = {
     "DORA": "../results/dora_maritime/",
     "DORA Baseline": "../results/dora_baseline_maritime/",
     "Random Walk": "../results/randomwalk_maritime/",
+    "DORA Communications": "../results/dora_comms_maritime/",
 }
 FIGURES_FOLDER = "figures/"
 ARENA_HALF = 8
