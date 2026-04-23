@@ -14,6 +14,7 @@ This project adapts the Distributed Online Resource Allocation (DORA) algorithm 
 | Algorithm | File | Description |
 |-----------|------|-------------|
 | **DORA Maritime** | `dora_maritime.bzz` | Improved DORA with tracker/explorer split and velocity prediction |
+| **DORA Comms** | `dora_comms_maritime.bzz` | DORA Maritime with added sparse communication logic |
 | **DORA Baseline** | `dora_baseline_maritime.bzz` | Standard DORA exploration with drift bias only |
 | **Random Walk** | `randomwalk_maritime.bzz` | Random walk baseline for comparison |
 
@@ -28,10 +29,12 @@ maritime-sar-dora/
 ├── sim/
 │   ├── algorithms/             # Buzz swarm algorithms
 │   │   ├── dora_maritime.bzz
+│   │   ├── dora_comms_maritime.bzz
 │   │   ├── dora_baseline_maritime.bzz
 │   │   └── randomwalk_maritime.bzz
 │   ├── scenarios/              # ARGoS simulation configs
 │   │   ├── maritime.argos
+│   │   ├── dora_comms_maritime.argos
 │   │   ├── dora_baseline_maritime.argos
 │   │   └── randomwalk_maritime.argos
 │   ├── config/
